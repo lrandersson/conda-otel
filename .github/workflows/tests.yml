@@ -19,8 +19,6 @@ jobs:
       - uses: conda-incubator/setup-miniconda@be893c923ea9cf1cf7cd510fbdde27c7e18cbdcb # v4.1.0
         with:
           activate-environment: test
-          python-version: '3.14'
-          channels: defaults
-      - run: conda install --yes conda=26.7 pip
-      - run: pip install -e ".[test]"
+          environment-file: environment.yml
+      - run: pip install -e .
       - run: pytest
