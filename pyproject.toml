@@ -14,12 +14,6 @@ readme = "README.md"
 requires-python = ">=3.11"
 version = "0.0.1"
 
-[project.optional-dependencies]
-test = [
-  "opentelemetry-exporter-otlp-proto-http",
-  "pytest<9.1",
-]
-
 [project.urls]
 Homepage = "https://github.com/lrandersson/conda-otel"
 
