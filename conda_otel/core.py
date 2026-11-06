@@ -8,8 +8,9 @@ import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
-from importlib.metadata import entry_points
 from typing import TYPE_CHECKING, Any, Callable
+
+import pluggy
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -21,8 +22,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-#: Entry-point group in which provider packages register themselves.
-ENTRY_POINT_GROUP = "conda_otel.providers"
+
+class ProviderSpecs:
+    """Extension point for conda plugins that supply telemetry providers."""
+
+    @pluggy.HookspecMarker("conda")
+    def conda_otel_providers(self, context: Context) -> list[Provider]:
+        """Return providers enabled by their own conda settings."""
 
 
 @dataclass
@@ -41,7 +47,7 @@ class Event:
 
 @dataclass
 class Provider:
-    """What a provider package returns from its entry point.
+    """What a conda plugin returns from its provider hook.
 
     `name` identifies the provider in flush results and debug logs.
     `exporter` sends the log records. `resource_attributes` are set once on the
@@ -93,22 +99,21 @@ def clean_attributes(attributes: dict[str, Any]) -> dict[str, Any]:
 
 
 def load_providers(context: Context) -> list[Provider]:
-    """Call each registered entry point with the conda context.
+    """Discover providers registered with conda's plugin manager.
 
-    Skip a provider that fails to load.
+    Note: pluggy propagates a provider hook failure, so another provider may
+    not load. Isolating hooks here would bypass pluggy's wrapper semantics.
     """
-    providers = []
+    manager = context.plugin_manager
+    hook = getattr(manager.hook, "conda_otel_providers", None)
+    if hook is None or hook.spec is None:
+        manager.add_hookspecs(ProviderSpecs)
     with ignore_otel_environment():
-        for entry_point in entry_points(group=ENTRY_POINT_GROUP):
-            try:
-                providers.append(entry_point.load()(context))
-            except Exception:
-                logger.debug(
-                    "Skipping provider %s: it failed to load.",
-                    entry_point.name,
-                    exc_info=True,
-                )
-    return providers
+        return [
+            provider
+            for group in manager.hook.conda_otel_providers(context=context)
+            for provider in group
+        ]
 
 
 class Dispatcher:
