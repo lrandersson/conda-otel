@@ -6,20 +6,18 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
-from conda_otel import core
-from conda_otel.core import Dispatcher, Event, Provider
+from conda.plugins.hookspec import CondaSpecs
+from conda.plugins.manager import CondaPluginManager
 from opentelemetry import _logs
-from opentelemetry.proto.collector.logs.v1.logs_service_pb2 import (
-    ExportLogsServiceRequest,
-)
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import LogRecordExporter, LogRecordExportResult
 
-if TYPE_CHECKING:
-    from conftest import RecordingServer
+from conda_otel import core
+from conda_otel.core import Dispatcher, Event, Provider
 
 
 def records(provider: Provider) -> list[dict[str, Any]]:
@@ -117,73 +115,149 @@ def test_otel_variables_are_restored(monkeypatch: pytest.MonkeyPatch) -> None:
     assert os.environ["OTEL_SDK_DISABLED"] == "true"
 
 
-def install_entry_point(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, module: str, source: str
-) -> None:
-    """Make a fake package that registers the Python code in `source` as a provider."""
-    dist = tmp_path / f"{module}-1.0.dist-info"
-    dist.mkdir()
-    (dist / "METADATA").write_text(f"Name: {module}\nVersion: 1.0\n")
-    (dist / "entry_points.txt").write_text(
-        f"[{core.ENTRY_POINT_GROUP}]\n{module} = {module}:make\n"
-    )
-    (tmp_path / f"{module}.py").write_text(source)
-    monkeypatch.syspath_prepend(str(tmp_path))
+def test_conda_plugin_provider_is_discovered(in_memory: Provider) -> None:
+    """An ordinary conda plugin supplies a provider through the core hook."""
+    from conda.plugins import hookimpl
 
+    class FakePlugin:
+        @hookimpl(optionalhook=True)
+        def conda_otel_providers(self, context):
+            yield in_memory
 
-def otlp_provider_source(exporter_arguments: str = "") -> str:
-    """Return the source of a provider that uses the OTLP HTTP exporter."""
-    return (
-        "from conda_otel.core import Provider\n"
-        "from opentelemetry.exporter.otlp.proto.http._log_exporter import "
-        "OTLPLogExporter\n"
-        "def make(context):\n"
-        f"    return Provider('fake', OTLPLogExporter({exporter_arguments}))\n"
-    )
-
-
-def test_exporter_is_built_without_otel_environment(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """An exporter with no endpoint must not use `OTEL_EXPORTER_OTLP_ENDPOINT`."""
-    monkeypatch.setenv(
-        "OTEL_EXPORTER_OTLP_ENDPOINT", "http://env-endpoint.invalid:4318"
-    )
-    install_entry_point(monkeypatch, tmp_path, "fake_env", otlp_provider_source())
-    (provider,) = core.load_providers(object())
-    assert provider.exporter._endpoint == "http://localhost:4318/v1/logs"
-
-
-def test_discovery_through_entry_point_group(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, otlp_server: RecordingServer
-) -> None:
-    """A registered provider is found and receives events."""
-    source = otlp_provider_source(f"endpoint='{otlp_server.endpoint}/v1/logs'")
-    install_entry_point(monkeypatch, tmp_path, "fake_found", source)
-    dispatcher = Dispatcher(core.load_providers(object()))
+    manager = CondaPluginManager()
+    manager.add_hookspecs(CondaSpecs)
+    manager.register(FakePlugin())
+    context = SimpleNamespace(plugin_manager=manager)
+    dispatcher = Dispatcher(core.load_providers(context))
     dispatcher.emit(Event("e", {"a": 1}))
-    assert dispatcher.flush() == {"fake": True}
-    ((path, _, body),) = otlp_server.received
-    assert path == "/v1/logs"
-    request = ExportLogsServiceRequest()
-    request.ParseFromString(body)
-    (record,) = request.resource_logs[0].scope_logs[0].log_records
-    assert {kv.key for kv in record.attributes} == {"a"}
-    assert record.event_name == "e"
+    assert dispatcher.flush() == {"in-memory": True}
+    assert records(in_memory) == [{"a": 1}]
+    assert len(core.load_providers(context)) == 1
 
 
-def test_provider_that_fails_to_load_is_skipped(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize("bad_first", [True, False], ids=["bad-first", "good-first"])
+@pytest.mark.parametrize(
+    "fail_on_iteration", [True, False], ids=["yield-fails", "call-fails"]
+)
+def test_failing_provider_aborts_discovery(
+    in_memory: Provider, bad_first: bool, fail_on_iteration: bool
 ) -> None:
-    """One broken provider must not stop the other providers from loading."""
-    install_entry_point(
-        monkeypatch,
-        tmp_path,
-        "fake_broken",
-        "def make(context):\n    raise RuntimeError('boom')\n",
-    )
-    install_entry_point(monkeypatch, tmp_path, "fake_good", otlp_provider_source())
-    assert [p.name for p in core.load_providers(object())] == ["fake"]
+    """A broken hook aborts the pluggy call; the capture hook disables telemetry."""
+    from conda.plugins import hookimpl
+
+    class GoodPlugin:
+        @hookimpl(optionalhook=True)
+        def conda_otel_providers(self, context):
+            yield in_memory
+
+    class BadPlugin:
+        @hookimpl(optionalhook=True)
+        def conda_otel_providers(self, context):
+            if fail_on_iteration:
+                def failing_generator():
+                    yield from ()
+                    raise RuntimeError("provider failed")
+
+                return failing_generator()
+            raise RuntimeError("provider failed")
+
+    manager = CondaPluginManager()
+    manager.add_hookspecs(CondaSpecs)
+    plugins = (BadPlugin(), GoodPlugin()) if bad_first else (GoodPlugin(), BadPlugin())
+    for plugin in plugins:
+        manager.register(plugin)
+
+    with pytest.raises(RuntimeError, match="provider failed"):
+        core.load_providers(SimpleNamespace(plugin_manager=manager))
+    assert records(in_memory) == []
+
+
+@pytest.mark.parametrize("bad_first", [True, False], ids=["bad-first", "good-first"])
+@pytest.mark.parametrize(
+    "fail_on_iteration", [True, False], ids=["yield-fails", "call-fails"]
+)
+def test_aliased_failing_provider_aborts_discovery(
+    in_memory: Provider, bad_first: bool, fail_on_iteration: bool
+) -> None:
+    """A specname alias has the same failure semantics as a named hook."""
+    from conda.plugins import hookimpl
+
+    class GoodPlugin:
+        @hookimpl(optionalhook=True)
+        def conda_otel_providers(self, context):
+            yield in_memory
+
+    class BadPlugin:
+        @hookimpl(optionalhook=True, specname="conda_otel_providers")
+        def aliased_provider(self, context):
+            if fail_on_iteration:
+                def failing_generator():
+                    yield from ()
+                    raise RuntimeError("aliased provider failed")
+
+                return failing_generator()
+            raise RuntimeError("aliased provider failed")
+
+    manager = CondaPluginManager()
+    manager.add_hookspecs(CondaSpecs)
+    plugins = (BadPlugin(), GoodPlugin()) if bad_first else (GoodPlugin(), BadPlugin())
+    for plugin in plugins:
+        manager.register(plugin)
+
+    with pytest.raises(RuntimeError, match="aliased provider failed"):
+        core.load_providers(SimpleNamespace(plugin_manager=manager))
+    assert records(in_memory) == []
+
+
+def test_provider_hook_wrapper_applies_to_provider_result(in_memory: Provider) -> None:
+    """A pluggy wrapper must process results from other provider plugins."""
+    from conda.plugins import hookimpl
+
+    class ProviderPlugin:
+        @hookimpl(optionalhook=True)
+        def conda_otel_providers(self, context):
+            yield in_memory
+
+    class WrapperPlugin:
+        @hookimpl(optionalhook=True, wrapper=True)
+        def conda_otel_providers(self, context):
+            results = yield
+            return [
+                [Provider(f"wrapped-{provider.name}", provider.exporter)]
+                for group in results
+                for provider in group
+            ]
+
+    manager = CondaPluginManager()
+    manager.add_hookspecs(CondaSpecs)
+    manager.register(ProviderPlugin())
+    manager.register(WrapperPlugin())
+    assert [p.name for p in core.load_providers(SimpleNamespace(plugin_manager=manager))] == [
+        "wrapped-in-memory"
+    ]
+
+
+def test_provider_that_yields_then_fails_aborts_discovery(in_memory: Provider) -> None:
+    """A partially yielded result is not dispatched after a hook failure."""
+    from conda.plugins import hookimpl
+
+    class PartialPlugin:
+        @hookimpl(optionalhook=True)
+        def conda_otel_providers(self, context):
+            yield Provider("partial", in_memory.exporter.__class__())
+            raise RuntimeError("provider failed")
+
+    manager = CondaPluginManager()
+    manager.add_hookspecs(CondaSpecs)
+    manager.register(PartialPlugin())
+    with pytest.raises(RuntimeError, match="provider failed"):
+        core.load_providers(SimpleNamespace(plugin_manager=manager))
+
+
+def test_no_provider_hook_returns_nothing() -> None:
+    manager = CondaPluginManager()
+    manager.add_hookspecs(CondaSpecs)
+    assert core.load_providers(SimpleNamespace(plugin_manager=manager)) == []
 
 
 def test_provider_that_fails_to_start_is_skipped(in_memory: Provider) -> None:
