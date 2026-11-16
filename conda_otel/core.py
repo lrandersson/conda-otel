@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Callable
 import pluggy
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterable, Iterator
 
     from conda.base.context import Context
     from opentelemetry.sdk._logs.export import LogRecordExporter
@@ -27,7 +27,7 @@ class ProviderSpecs:
     """Extension point for conda plugins that supply telemetry providers."""
 
     @pluggy.HookspecMarker("conda")
-    def conda_otel_providers(self, context: Context) -> list[Provider]:
+    def conda_otel_providers(self, context: Context) -> Iterable[Provider]:
         """Return providers enabled by their own conda settings."""
 
 
@@ -101,8 +101,8 @@ def clean_attributes(attributes: dict[str, Any]) -> dict[str, Any]:
 def load_providers(context: Context) -> list[Provider]:
     """Discover providers registered with conda's plugin manager.
 
-    Note: pluggy propagates a provider hook failure, so another provider may
-    not load. Isolating hooks here would bypass pluggy's wrapper semantics.
+    Note: pluggy propagates a provider hook failure, so no provider loads for
+    that command.
     """
     manager = context.plugin_manager
     hook = getattr(manager.hook, "conda_otel_providers", None)
