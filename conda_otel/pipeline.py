@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING
 
 from opentelemetry._logs import LogRecord
 from opentelemetry.sdk._logs import LoggerProvider, LogRecordLimits, ReadWriteLogRecord
@@ -14,7 +14,12 @@ from opentelemetry.sdk._logs.export import (
 )
 from opentelemetry.sdk.resources import Resource
 
-from conda_otel.core import Event, Provider, ignore_otel_environment
+from conda_otel.core import ignore_otel_environment
+
+if TYPE_CHECKING:
+    from typing import Any
+
+    from conda_otel.core import Event, Provider
 
 # A user must not see telemetry errors, for example on a blocked network.
 # Conda prints root logger records to stderr, so stop OTel records here.

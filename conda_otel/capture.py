@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from enum import StrEnum
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from conda.base.context import context
 from conda.exceptions import InvalidMatchSpec, PackagesNotFoundInChannelsError
@@ -16,6 +16,8 @@ from conda.models.match_spec import MatchSpec
 from conda_otel.core import Dispatcher, Event, load_providers
 
 if TYPE_CHECKING:
+    from typing import Any
+
     from conda.models.records import PackageRecord
     from conda.plugins.types import CondaExceptionEvent
 

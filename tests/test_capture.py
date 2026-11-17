@@ -1,13 +1,19 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
 from types import SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING
 
 import pytest
 from conda.exceptions import PackagesNotFoundInChannelsError
+
 from conda_otel import capture
-from conda_otel.core import Dispatcher, Provider
+from conda_otel.core import Dispatcher
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+    from typing import Any
+
+    from conda_otel.core import Provider
 
 
 @pytest.fixture
@@ -79,9 +85,7 @@ def test_packages_not_found_event(
     """Missing packages send one event and clear the state."""
     run_install(["nope"])
     exc = PackagesNotFoundInChannelsError(["nope"], ["conda-forge"])
-    event = SimpleNamespace(
-        exc_value=exc, exc_type=type(exc), channels=("from-event",)
-    )
+    event = SimpleNamespace(exc_value=exc, exc_type=type(exc), channels=("from-event",))
     capture.report_error(event)
     ((name, attrs),) = sent(in_memory)
     assert name == "install.packages_not_found"
