@@ -7,7 +7,7 @@ import sys
 import time
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING
 
 import pluggy
 import pytest
@@ -23,6 +23,9 @@ from opentelemetry.sdk._logs.export import (
 
 from conda_otel import core
 from conda_otel.core import Dispatcher, Event, Provider
+
+if TYPE_CHECKING:
+    from typing import Any
 
 
 def records(provider: Provider) -> list[dict[str, Any]]:
@@ -275,10 +278,7 @@ def test_attribute_limit_variables_set_before_start_are_ignored() -> None:
         text=True,
         check=True,
     ).stdout
-    assert (
-        out.strip()
-        == "[('a', 'abcdefgh'), ('b', 1), ('c', 2)]"
-    )
+    assert out.strip() == "[('a', 'abcdefgh'), ('b', 1), ('c', 2)]"
 
 
 def test_otel_log_records_do_not_reach_the_root_logger(

@@ -26,3 +26,25 @@ packages = ["conda_otel"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+show-fixes = true
+
+[tool.ruff.lint]
+flake8-type-checking = { exempt-modules = [], strict = true }
+# see https://docs.astral.sh/ruff/rules/
+select = [
+  "B012",  # bugbear
+  "E",  # pycodestyle errors
+  "F",  # pyflakes
+  "FA",  # flake8-future-annotations
+  "G",  # flake8-logging-format
+  "I",  # isort
+  "ISC",  # flake8-implicit-str-concat
+  "LOG",  # flake8-logging
+  "RUF100",  # Unused noqa directive
+  "T10",  # flake8-debugger
+  "TC",  # flake8-type-checking
+  "UP",  # pyupgrade
+  "W",  # pycodestyle warnings
+]

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import pytest
-from conda_otel.core import Provider
 from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter
+
+from conda_otel.core import Provider
 
 
 @pytest.fixture

@@ -8,12 +8,13 @@ import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING
 
 import pluggy
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Iterator
+    from collections.abc import Callable, Iterable, Iterator
+    from typing import Any
 
     from conda.base.context import Context
     from opentelemetry.sdk._logs.export import LogRecordExporter
