@@ -21,11 +21,21 @@ from opentelemetry.sdk._logs.export import (
     LogRecordExportResult,
 )
 
-from conda_otel import core
+from conda_otel import core, events
 from conda_otel.core import Dispatcher, Event, Provider
+from conda_otel.events import (
+    ALL_EVENTS,
+    Command,
+    EventName,
+    EventSelector,
+    Outcome,
+)
 
 if TYPE_CHECKING:
     from typing import Any
+
+
+SUCCESS_ONLY = [EventSelector.exact(Command.INSTALL, Outcome.SUCCESS)]
 
 
 def records(provider: Provider) -> list[dict[str, Any]]:
@@ -39,26 +49,29 @@ def test_emit_adds_event_name_and_drops_non_scalar_values(in_memory: Provider) -
     """The event name is added. Nested and mixed-type values are dropped."""
     dispatcher = Dispatcher([in_memory])
     dispatcher.emit(
-        Event("e", {"a": 1, "nested": {"x": 1}, "mixed": [1, "a"], "ok": ["a"]})
+        Event(
+            EventName.SUCCESS,
+            {"a": 1, "nested": {"x": 1}, "mixed": [1, "a"], "ok": ["a"]},
+        )
     )
     dispatcher.flush()
     assert records(in_memory) == [{"a": 1, "ok": ("a",)}]
     (exported,) = in_memory.exporter.get_finished_logs()
-    assert exported.log_record.event_name == "e"
+    assert exported.log_record.event_name == EventName.SUCCESS
 
 
 def test_no_providers_is_falsy_and_does_nothing() -> None:
     """With no provider, the dispatcher is false and sends nothing."""
     dispatcher = Dispatcher([])
     assert not dispatcher
-    dispatcher.emit(Event("e"))
+    dispatcher.emit(Event(EventName.SUCCESS))
     assert dispatcher.flush() == {}
 
 
 def test_global_logger_provider_is_not_used(in_memory: Provider) -> None:
     """The dispatcher does not set the global OTel logger provider."""
     dispatcher = Dispatcher([in_memory])
-    dispatcher.emit(Event("e"))
+    dispatcher.emit(Event(EventName.SUCCESS))
     dispatcher.flush()
     assert not isinstance(_logs.get_logger_provider(), LoggerProvider)
 
@@ -66,13 +79,16 @@ def test_global_logger_provider_is_not_used(in_memory: Provider) -> None:
 def test_transform_is_per_provider_and_can_drop(in_memory: Provider) -> None:
     """Each provider changes or drops the event on its own copy."""
     exporter_class = in_memory.exporter.__class__
-    dropping = Provider("dropping", exporter_class(), transform=lambda e: None)
+    dropping = Provider(
+        "dropping", exporter_class(), events=SUCCESS_ONLY, transform=lambda e: None
+    )
     changing = Provider(
         "changing",
         exporter_class(),
+        events=SUCCESS_ONLY,
         transform=lambda e: Event("renamed", {"k": "v"}),
     )
-    event = Event("e", {"secret": "x"})
+    event = Event(EventName.SUCCESS, {"secret": "x"})
     dispatcher = Dispatcher([in_memory, dropping, changing])
     dispatcher.emit(event)
     dispatcher.flush()
@@ -104,7 +120,7 @@ def test_otel_environment_is_ignored(
     dispatcher = Dispatcher([in_memory])
     if when == "before_emit":
         monkeypatch.setenv(var, value)
-    dispatcher.emit(Event("e", {"a": "abcdefgh", "b": 1, "c": 2}))
+    dispatcher.emit(Event(EventName.SUCCESS, {"a": "abcdefgh", "b": 1, "c": 2}))
     dispatcher.flush()
     (record,) = in_memory.exporter.get_finished_logs()
     assert dict(record.log_record.attributes) == {
@@ -159,7 +175,7 @@ class FailsAfterYieldPlugin:
     @hookimpl(optionalhook=True)
     def conda_otel_providers(self, context):
         """Yield a provider, then raise while conda reads the result."""
-        yield Provider("partial", InMemoryLogRecordExporter())
+        yield Provider("partial", InMemoryLogRecordExporter(), events=SUCCESS_ONLY)
         raise RuntimeError("provider failed")
 
 
@@ -167,7 +183,7 @@ def test_conda_plugin_provider_is_discovered(in_memory: Provider) -> None:
     """An ordinary conda plugin supplies a provider through the core hook."""
     context = make_context(ValidPlugin(in_memory))
     dispatcher = Dispatcher(core.load_providers(context))
-    dispatcher.emit(Event("e", {"a": 1}))
+    dispatcher.emit(Event(EventName.SUCCESS, {"a": 1}))
     assert dispatcher.flush() == {"in-memory": True}
     assert records(in_memory) == [{"a": 1}]
     # A second call must not register the hookspec again.
@@ -221,7 +237,12 @@ def test_failing_provider_aborts_discovery(
 
 def test_provider_that_fails_to_start_is_skipped(in_memory: Provider) -> None:
     """A provider whose pipeline cannot start is left out. The others still work."""
-    broken = Provider("broken", in_memory.exporter.__class__(), resource_attributes=1)
+    broken = Provider(
+        "broken",
+        in_memory.exporter.__class__(),
+        events=SUCCESS_ONLY,
+        resource_attributes=1,
+    )
     dispatcher = Dispatcher([broken, in_memory])
     assert [p.provider.name for p in dispatcher.pipelines] == ["in-memory"]
 
@@ -244,8 +265,10 @@ class SlowExporter(LogRecordExporter):
 
 def test_flush_is_bounded_and_isolated(in_memory: Provider) -> None:
     """A slow provider does not block a fast one, and flush ends within the budget."""
-    dispatcher = Dispatcher([Provider("slow", SlowExporter(3)), in_memory])
-    dispatcher.emit(Event("e"))
+    dispatcher = Dispatcher(
+        [Provider("slow", SlowExporter(3), events=SUCCESS_ONLY), in_memory]
+    )
+    dispatcher.emit(Event(EventName.SUCCESS))
     start = time.monotonic()
     result = dispatcher.flush(budget=0.5)
     assert time.monotonic() - start < 1.5
@@ -257,10 +280,12 @@ def test_attribute_limit_variables_set_before_start_are_ignored() -> None:
     """The SDK reads `OTEL_ATTRIBUTE_*` at import, so test in a new process."""
     code = (
         "from conda_otel.core import Dispatcher, Event, Provider\n"
+        "from conda_otel.events import Command, EventName, EventSelector, Outcome\n"
         "from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter\n"
-        "p = Provider('m', InMemoryLogRecordExporter())\n"
+        "sel = EventSelector.exact(Command.INSTALL, Outcome.SUCCESS)\n"
+        "p = Provider('m', InMemoryLogRecordExporter(), events=[sel])\n"
         "d = Dispatcher([p])\n"
-        "d.emit(Event('e', {'a': 'abcdefgh', 'b': 1, 'c': 2}))\n"
+        "d.emit(Event(EventName.SUCCESS, {'a': 'abcdefgh', 'b': 1, 'c': 2}))\n"
         "d.flush()\n"
         "(r,) = p.exporter.get_finished_logs()\n"
         "print(sorted(r.log_record.attributes.items()))\n"
@@ -306,3 +331,118 @@ def test_importing_hooks_does_not_import_the_otel_sdk() -> None:
         check=True,
     ).stdout
     assert out.strip() == "False"
+
+
+def test_events_are_required() -> None:
+    """A provider without `events` cannot be built."""
+    with pytest.raises(TypeError, match="events"):
+        Provider("p", InMemoryLogRecordExporter())  # type: ignore[call-arg]
+
+
+def test_matching_event_is_exported() -> None:
+    """An event that the provider subscribed to is exported."""
+    provider = Provider("p", InMemoryLogRecordExporter(), events=SUCCESS_ONLY)
+    dispatcher = Dispatcher([provider])
+    dispatcher.emit(Event(EventName.SUCCESS, {"a": 1}))
+    dispatcher.flush()
+    assert records(provider) == [{"a": 1}]
+
+
+def test_non_matching_event_never_reaches_the_provider() -> None:
+    """An event outside the subscription skips the transform and the export."""
+    calls: list[Event] = []
+
+    def transform(event: Event) -> Event:
+        calls.append(event)
+        return event
+
+    provider = Provider(
+        "p", InMemoryLogRecordExporter(), events=SUCCESS_ONLY, transform=transform
+    )
+    dispatcher = Dispatcher([provider])
+    dispatcher.emit(Event(EventName.PACKAGES_NOT_FOUND))
+    dispatcher.flush()
+    assert calls == []
+    assert records(provider) == []
+
+
+def test_transform_can_rename_the_event() -> None:
+    """The exported name is the one the transform returns."""
+    provider = Provider(
+        "p",
+        InMemoryLogRecordExporter(),
+        events=SUCCESS_ONLY,
+        transform=lambda e: Event("renamed"),
+    )
+    dispatcher = Dispatcher([provider])
+    dispatcher.emit(Event(EventName.SUCCESS))
+    dispatcher.flush()
+    (exported,) = provider.exporter.get_finished_logs()
+    assert exported.log_record.event_name == "renamed"
+
+
+def test_all_events_does_not_match_unregistered_events() -> None:
+    """An event that is not in the registry never reaches the transform."""
+    calls: list[Event] = []
+
+    def transform(event: Event) -> Event:
+        calls.append(event)
+        return event
+
+    provider = Provider(
+        "p", InMemoryLogRecordExporter(), events=[ALL_EVENTS], transform=transform
+    )
+    dispatcher = Dispatcher([provider])
+    dispatcher.emit(Event("create.success"))
+    dispatcher.flush()
+    assert calls == []
+    assert records(provider) == []
+
+
+@pytest.mark.parametrize(
+    "bad_events",
+    [
+        "",
+        [ALL_EVENTS, "x"],
+        [EventSelector.exact(Command.INSTALL, "bogus")],
+        [EventSelector.for_command(None)],
+    ],
+)
+def test_invalid_declaration_skips_only_that_provider(
+    caplog: pytest.LogCaptureFixture, in_memory: Provider, bad_events: Any
+) -> None:
+    """An invalid declaration logs one warning. The other providers still work."""
+    bad = Provider("bad", InMemoryLogRecordExporter(), events=bad_events)
+    context = make_context(ValidPlugin(bad), ValidPlugin(in_memory))
+    with caplog.at_level(logging.WARNING):
+        dispatcher = Dispatcher(core.load_providers(context))
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "bad" in warnings[0].getMessage()
+    assert [p.provider.name for p in dispatcher.pipelines] == ["in-memory"]
+    dispatcher.emit(Event(EventName.SUCCESS, {"a": 1}))
+    assert dispatcher.flush() == {"in-memory": True}
+    assert records(in_memory) == [{"a": 1}]
+
+
+def test_empty_declaration_starts_no_pipeline_and_logs_nothing(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An empty list means the provider wants no events."""
+    provider = Provider("p", InMemoryLogRecordExporter(), events=[])
+    with caplog.at_level(logging.DEBUG):
+        dispatcher = Dispatcher([provider])
+    assert dispatcher.pipelines == []
+    assert caplog.records == []
+
+
+def test_wildcard_with_no_matches_starts_no_pipeline_and_logs_nothing(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A valid wildcard that matches nothing is not an error."""
+    monkeypatch.setattr(events, "SUPPORTED_COMMAND_OUTCOME_PAIRS", frozenset())
+    provider = Provider("p", InMemoryLogRecordExporter(), events=[ALL_EVENTS])
+    with caplog.at_level(logging.DEBUG):
+        dispatcher = Dispatcher([provider])
+    assert dispatcher.pipelines == []
+    assert caplog.records == []

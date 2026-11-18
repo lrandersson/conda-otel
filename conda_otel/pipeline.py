@@ -67,9 +67,10 @@ class TrackingExporter(LogRecordExporter):
 class Pipeline:
     """One private logger with its own batch processor for one provider."""
 
-    def __init__(self, provider: Provider):
+    def __init__(self, provider: Provider, events: frozenset[str]):
         """Build the private logger and batch processor for the provider."""
         self.provider = provider
+        self.events = events
         self.exporter = TrackingExporter(provider.exporter)
         with ignore_otel_environment():
             self.logger_provider = LoggerProvider(

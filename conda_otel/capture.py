@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from enum import StrEnum
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
@@ -14,6 +13,7 @@ from conda.exceptions import InvalidMatchSpec, PackagesNotFoundInChannelsError
 from conda.models.match_spec import MatchSpec
 
 from conda_otel.core import Dispatcher, Event, load_providers
+from conda_otel.events import EventName
 
 if TYPE_CHECKING:
     from typing import Any
@@ -22,13 +22,6 @@ if TYPE_CHECKING:
     from conda.plugins.types import CondaExceptionEvent
 
 logger = logging.getLogger(__name__)
-
-
-class EventName(StrEnum):
-    """Neutral event names. Providers map them to their own names."""
-
-    PACKAGES_NOT_FOUND = "install.packages_not_found"
-    SUCCESS = "install.success"
 
 
 @dataclass

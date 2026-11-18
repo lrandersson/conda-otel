@@ -37,14 +37,20 @@ def conda_otel_providers(context):
         from my_provider.exporter import make_exporter
 
         from conda_otel.core import Provider
+        from conda_otel.events import Command, EventSelector, Outcome
 
-        yield Provider(name="my-provider", exporter=make_exporter(context))
+        yield Provider(
+            name="my-provider",
+            exporter=make_exporter(context),
+            events=[EventSelector.exact(Command.INSTALL, Outcome.SUCCESS)],
+        )
 ```
 
 `Provider` takes these fields:
 
 - `name` identifies the provider in flush results and debug logs.
 - `exporter` is the OpenTelemetry `LogRecordExporter` that sends the log records.
+- `events` is required and keyword-only. It lists the `EventSelector` values for the events the provider receives. See [Subscriptions](#subscriptions).
 - `resource_attributes` (optional) are OpenTelemetry resource attributes for this provider's log records.
 - `transform` (optional) takes an `Event` and returns a changed `Event`, or `None` to drop the event for this provider.
 
@@ -57,6 +63,30 @@ plugins:
 
 or with the environment variable `CONDA_PLUGINS_MY_PROVIDER=true`.
 The global `conda_otel` setting is on by default. Set it to `false` to turn off all telemetry.
+
+## Subscriptions
+
+`events` is a list of selectors from `conda_otel.events`. A provider receives only the events that its selectors match.
+
+An exact selector matches one registered pair:
+
+```python
+EventSelector.exact(Command.INSTALL, Outcome.SUCCESS)
+```
+
+`EventSelector.for_command(...)` matches every outcome of that command, including outcomes added later, and `EventSelector.for_outcome(...)` matches that outcome for every command. `[ALL_EVENTS]` matches every event in the registry, including events added later. Prefer exact selectors, otherwise a new event may reach your provider with future updates.
+
+Use a list and not a bare selector (`events=EventSelector.exact(...)` is rejected).
+
+To check what a declaration matches, use `matched_events()`. It returns the event names as a `frozenset`:
+
+```python
+>>> from conda_otel.events import Command, EventSelector, Outcome, matched_events
+>>> matched_events([EventSelector.exact(Command.INSTALL, Outcome.SUCCESS)])
+frozenset({'install.success'})
+```
+
+If the declaration is invalid, conda-otel logs a warning and skips that provider; the others keep running.
 
 ## License
 
