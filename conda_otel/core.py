@@ -123,7 +123,7 @@ def load_providers(context: Context) -> list[Provider]:
 
 
 class Dispatcher:
-    """Send each event to every provider, each with its own pipeline."""
+    """Send each event to providers subscribed to it."""
 
     def __init__(self, providers: list[Provider]):
         """Start a pipeline for each provider."""
@@ -133,10 +133,10 @@ class Dispatcher:
         self.pipelines: list[Pipeline] = []
         for provider in providers:
             try:
-                names = matched_events(provider.events)
-                if not names:
+                event_names = matched_events(provider.events)
+                if not event_names:
                     continue
-                self.pipelines.append(Pipeline(provider, names))
+                self.pipelines.append(Pipeline(provider, event_names))
             except ValueError as exc:
                 logger.warning(
                     "Skipping provider %s: invalid events have been declared (%s). "
