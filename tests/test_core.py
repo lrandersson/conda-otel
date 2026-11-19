@@ -78,14 +78,15 @@ def test_global_logger_provider_is_not_used(in_memory: Provider) -> None:
 
 def test_transform_is_per_provider_and_can_drop(in_memory: Provider) -> None:
     """Each provider changes or drops the event on its own copy."""
-    # Get the class of the fixture's exporter.
-    exporter_class = in_memory.exporter.__class__
     dropping = Provider(
-        "dropping", exporter_class(), events=SUCCESS_ONLY, transform=lambda e: None
+        "dropping",
+        InMemoryLogRecordExporter(),
+        events=SUCCESS_ONLY,
+        transform=lambda e: None,
     )
     changing = Provider(
         "changing",
-        exporter_class(),
+        InMemoryLogRecordExporter(),
         events=SUCCESS_ONLY,
         transform=lambda e: Event("renamed", {"k": "v"}),
     )
@@ -241,7 +242,7 @@ def test_provider_that_fails_to_start_is_skipped(in_memory: Provider) -> None:
     """A provider whose pipeline cannot start is left out. The others still work."""
     broken = Provider(
         "broken",
-        in_memory.exporter.__class__(),
+        InMemoryLogRecordExporter(),
         events=SUCCESS_ONLY,
         resource_attributes=1,
     )
