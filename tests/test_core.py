@@ -352,7 +352,16 @@ def test_matching_event_is_exported() -> None:
     assert records(provider) == [dummy_data]
 
 
-def test_non_matching_event_never_reaches_the_provider() -> None:
+@pytest.mark.parametrize(
+    ("subscription", "event"),
+    [
+        pytest.param(SUCCESS_ONLY, EventName.PACKAGES_NOT_FOUND, id="not-subscribed"),
+        pytest.param([ALL_EVENTS], "example.success", id="unsupported"),
+    ],
+)
+def test_unmatched_event_skips_provider(
+    subscription: list[EventSelector], event: str
+) -> None:
     """An event outside the subscription skips the transform and the export."""
     calls: list[Event] = []
 
@@ -361,10 +370,10 @@ def test_non_matching_event_never_reaches_the_provider() -> None:
         return event
 
     provider = Provider(
-        "p", InMemoryLogRecordExporter(), events=SUCCESS_ONLY, transform=transform
+        "p", InMemoryLogRecordExporter(), events=subscription, transform=transform
     )
     dispatcher = Dispatcher([provider])
-    dispatcher.emit(Event(EventName.PACKAGES_NOT_FOUND))
+    dispatcher.emit(Event(event))
     dispatcher.flush()
     assert calls == []
     assert records(provider) == []
@@ -383,24 +392,6 @@ def test_transform_can_rename_the_event() -> None:
     dispatcher.flush()
     (exported,) = provider.exporter.get_finished_logs()
     assert exported.log_record.event_name == "renamed"
-
-
-def test_all_events_does_not_match_unregistered_events() -> None:
-    """An event that is not in the registry never reaches the transform."""
-    calls: list[Event] = []
-
-    def transform(event: Event) -> Event:
-        calls.append(event)
-        return event
-
-    provider = Provider(
-        "p", InMemoryLogRecordExporter(), events=[ALL_EVENTS], transform=transform
-    )
-    dispatcher = Dispatcher([provider])
-    dispatcher.emit(Event("create.success"))
-    dispatcher.flush()
-    assert calls == []
-    assert records(provider) == []
 
 
 @pytest.mark.parametrize(
