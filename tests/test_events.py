@@ -47,19 +47,30 @@ def future_event_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def test_exact_selector_matches_one_event() -> None:
-    """An exact selector matches only its own pair."""
-    assert matched_events([EventSelector.exact(Command.INSTALL, Outcome.SUCCESS)]) == {
-        "install.success"
-    }
-
-
-def test_for_command_matches_all_outcomes_of_command() -> None:
-    """A command selector matches every outcome of that command."""
-    assert matched_events([EventSelector.for_command(Command.INSTALL)]) == {
-        "install.success",
-        "install.packages_not_found",
-    }
+@pytest.mark.parametrize(
+    ("selector", "expected"),
+    [
+        pytest.param(
+            EventSelector.exact(Command.INSTALL, Outcome.SUCCESS),
+            {"install.success"},
+            id="exact",
+        ),
+        pytest.param(
+            EventSelector.for_command(Command.INSTALL),
+            {"install.success", "install.packages_not_found"},
+            id="by-command",
+        ),
+        pytest.param(
+            ALL_EVENTS,
+            {"install.success", "install.packages_not_found"},
+            id="all-events",
+        ),
+    ],
+)
+def test_selector_matches_supported_events(
+    selector: EventSelector, expected: set[str]
+) -> None:
+    assert matched_events([selector]) == expected
 
 
 def test_for_outcome_matches_all_commands_with_outcome(
@@ -80,14 +91,6 @@ def test_for_outcome_matches_all_commands_with_outcome(
     assert matched_events([EventSelector.for_outcome(FutureOutcome.SUCCESS)]) == {
         "install.success",
         "example.success",
-    }
-
-
-def test_all_events_matches_every_supported_pair() -> None:
-    """The wildcard matches every supported pair."""
-    assert matched_events([ALL_EVENTS]) == {
-        "install.success",
-        "install.packages_not_found",
     }
 
 
