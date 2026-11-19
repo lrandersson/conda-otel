@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING
 
 import pluggy
 
+from conda_otel.events import matched_events
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator
     from typing import Any
@@ -19,6 +21,7 @@ if TYPE_CHECKING:
     from conda.base.context import Context
     from opentelemetry.sdk._logs.export import LogRecordExporter
 
+    from conda_otel.events import EventSelector
     from conda_otel.pipeline import Pipeline
 
 logger = logging.getLogger(__name__)
@@ -52,11 +55,13 @@ class Provider:
 
     `name` identifies the provider in flush results and debug logs.
     `exporter` sends the log records. `resource_attributes` are set once on the
-    provider's own OTel pipeline.
+    provider's own OTel pipeline. `events` lists the `EventSelector` values the
+    provider subscribes to. An empty list means it receives nothing.
     """
 
     name: str
     exporter: LogRecordExporter
+    events: Iterable[EventSelector] = field(kw_only=True)
     resource_attributes: dict[str, Any] = field(default_factory=dict)
     #: Return a changed event, or None to drop it for this provider.
     transform: Callable[[Event], Event | None] | None = None
@@ -118,7 +123,7 @@ def load_providers(context: Context) -> list[Provider]:
 
 
 class Dispatcher:
-    """Send each event to every provider, each with its own pipeline."""
+    """Send each event to providers subscribed to it."""
 
     def __init__(self, providers: list[Provider]):
         """Start a pipeline for each provider."""
@@ -128,10 +133,20 @@ class Dispatcher:
         self.pipelines: list[Pipeline] = []
         for provider in providers:
             try:
-                self.pipelines.append(Pipeline(provider))
+                event_names = matched_events(provider.events)
+                if not event_names:
+                    continue
+                self.pipelines.append(Pipeline(provider, event_names))
+            except ValueError as exc:
+                logger.warning(
+                    "Skipping provider %s: invalid events have been declared (%s). "
+                    "Use a list of EventSelector values from conda_otel.events.",
+                    provider.name,
+                    exc,
+                )
             except Exception:
                 logger.debug(
-                    "Skipping provider %s: it failed to start.",
+                    "Skipping provider %s: it failed to start due to an error.",
                     provider.name,
                     exc_info=True,
                 )
@@ -146,6 +161,8 @@ class Dispatcher:
         A provider whose transform returns None does not get the event.
         """
         for pipe in self.pipelines:
+            if event.name not in pipe.events:
+                continue
             copy = replace(event, attributes=dict(event.attributes))
             if pipe.provider.transform is not None:
                 copy = pipe.provider.transform(copy)

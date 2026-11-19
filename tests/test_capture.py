@@ -5,15 +5,21 @@ from typing import TYPE_CHECKING
 
 import pytest
 from conda.exceptions import PackagesNotFoundInChannelsError
+from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter
 
 from conda_otel import capture
-from conda_otel.core import Dispatcher
+from conda_otel.core import Dispatcher, Provider
+from conda_otel.events import (
+    ALL_EVENTS,
+    Command,
+    EventSelector,
+    Outcome,
+    matched_events,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from typing import Any
-
-    from conda_otel.core import Provider
 
 
 @pytest.fixture
@@ -59,6 +65,51 @@ def run_install(requested: tuple[str, ...] | list[str] = ("numpy",)) -> None:
     capture.capture_command("install")
     capture.capture_requested_packages(frozenset(requested), frozenset())
     capture.capture_resolved_packages("repodata.json", (), (record("numpy"),))
+
+
+def drive_success() -> None:
+    """Run a successful install through the hooks."""
+    run_install()
+    capture.report_success("install")
+
+
+def drive_packages_not_found() -> None:
+    """Run an install that reports missing packages through the hooks."""
+    run_install(["nope"])
+    exc = PackagesNotFoundInChannelsError(["nope"], ["conda-forge"])
+    capture.report_error(
+        SimpleNamespace(exc_value=exc, exc_type=type(exc), channels=())
+    )
+
+
+CAPTURE_CASES = {
+    "install.success": drive_success,
+    "install.packages_not_found": drive_packages_not_found,
+}
+
+
+@pytest.mark.parametrize("name", list(CAPTURE_CASES))
+def test_capture_delivers_each_case(
+    ctx: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    """Each capture case reaches a provider subscribed only to its event."""
+    command, outcome = name.split(".")
+    provider = Provider(
+        "in-memory",
+        InMemoryLogRecordExporter(),
+        events=[EventSelector.exact(Command(command), Outcome(outcome))],
+    )
+    dispatcher = Dispatcher([provider])
+    monkeypatch.setattr(capture, "get_dispatcher", lambda: dispatcher)
+    CAPTURE_CASES[name]()
+    assert dispatcher.flush() == {"in-memory": True}
+    ((event_name, _),) = sent(provider)
+    assert event_name == name
+
+
+def test_capture_cases_match_event_names() -> None:
+    """Every supported event has a capture case, with no extra cases."""
+    assert set(CAPTURE_CASES) == matched_events([ALL_EVENTS])
 
 
 def test_success_event(
