@@ -421,23 +421,22 @@ def test_invalid_declaration_skips_only_that_provider(
     assert records(in_memory) == [dummy_data]
 
 
-def test_empty_declaration_starts_no_pipeline_and_logs_nothing(
+@pytest.mark.parametrize(
+    ("subscription", "empty_catalog"),
+    [
+        pytest.param([], False, id="empty-declaration"),
+        pytest.param([ALL_EVENTS], True, id="wildcard-no-matches"),
+    ],
+)
+def test_no_matching_events_skips_pipeline(
+    subscription: list[EventSelector],
+    empty_catalog: bool,
+    monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """An empty list means the provider wants no events."""
-    provider = Provider("p", InMemoryLogRecordExporter(), events=[])
-    with caplog.at_level(logging.DEBUG):
-        dispatcher = Dispatcher([provider])
-    assert dispatcher.pipelines == []
-    assert caplog.records == []
-
-
-def test_wildcard_with_no_matches_starts_no_pipeline_and_logs_nothing(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    """A valid wildcard that matches nothing is not an error."""
-    monkeypatch.setattr(events, "SUPPORTED_COMMAND_OUTCOME_PAIRS", frozenset())
-    provider = Provider("p", InMemoryLogRecordExporter(), events=[ALL_EVENTS])
+    if empty_catalog:
+        monkeypatch.setattr(events, "SUPPORTED_COMMAND_OUTCOME_PAIRS", frozenset())
+    provider = Provider("p", InMemoryLogRecordExporter(), events=subscription)
     with caplog.at_level(logging.DEBUG):
         dispatcher = Dispatcher([provider])
     assert dispatcher.pipelines == []

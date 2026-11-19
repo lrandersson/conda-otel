@@ -94,31 +94,31 @@ def test_for_outcome_matches_all_commands_with_outcome(
     }
 
 
-def test_overlapping_selectors_are_deduplicated() -> None:
-    """Pairs matched by several selectors appear once in the result."""
-    selectors = [
-        EventSelector.exact(Command.INSTALL, Outcome.SUCCESS),
-        EventSelector.for_command(Command.INSTALL),
-        EventSelector.for_outcome(Outcome.SUCCESS),
-    ]
-    assert matched_events(selectors) == {
-        "install.success",
-        "install.packages_not_found",
-    }
-
-
-def test_all_events_mixed_with_exact_selector() -> None:
-    """The wildcard combines with exact selectors without changing the result."""
-    selectors = [ALL_EVENTS, EventSelector.exact(Command.INSTALL, Outcome.SUCCESS)]
-    assert matched_events(selectors) == {
-        "install.success",
-        "install.packages_not_found",
-    }
-
-
-def test_empty_declaration_matches_nothing() -> None:
-    """An empty list matches no events."""
-    assert matched_events([]) == frozenset()
+@pytest.mark.parametrize(
+    ("selectors", "expected"),
+    [
+        pytest.param(
+            [ALL_EVENTS, EventSelector.exact(Command.INSTALL, Outcome.SUCCESS)],
+            {"install.success", "install.packages_not_found"},
+            id="all-plus-exact",
+        ),
+        pytest.param([], set(), id="empty"),
+        # All three selectors match install.success.
+        pytest.param(
+            [
+                EventSelector.exact(Command.INSTALL, Outcome.SUCCESS),
+                EventSelector.for_command(Command.INSTALL),
+                EventSelector.for_outcome(Outcome.SUCCESS),
+            ],
+            {"install.success", "install.packages_not_found"},
+            id="overlapping",
+        ),
+    ],
+)
+def test_matched_events_combines_selectors(
+    selectors: list[EventSelector], expected: set[str]
+) -> None:
+    assert matched_events(selectors) == expected
 
 
 def test_event_name_literal_values() -> None:
