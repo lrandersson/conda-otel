@@ -70,6 +70,7 @@ def future_event_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_selector_matches_supported_events(
     selector: EventSelector, expected: set[str]
 ) -> None:
+    """Check which event names a single selector returns."""
     assert matched_events([selector]) == expected
 
 
@@ -118,6 +119,7 @@ def test_for_outcome_matches_all_commands_with_outcome(
 def test_matched_events_combines_selectors(
     selectors: list[EventSelector], expected: set[str]
 ) -> None:
+    """Return each matching event once, even if several selectors match it."""
     assert matched_events(selectors) == expected
 
 
@@ -131,11 +133,7 @@ def test_event_names_match_supported_pairs() -> None:
     """Every supported pair has an EventName, and no EventName is stale."""
     names = {e.value for e in EventName}
     supported_names = matched_events([ALL_EVENTS])
-    missing = sorted(supported_names - names)
-    extra = sorted(names - supported_names)
-    assert names == supported_names, (
-        f"missing from EventName: {missing}; extra: {extra}"
-    )
+    assert names == supported_names
 
 
 def test_supported_pairs_are_strict_subset_of_cross_product(

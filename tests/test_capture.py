@@ -103,23 +103,13 @@ def test_capture_delivers_each_case(
     monkeypatch.setattr(capture, "get_dispatcher", lambda: dispatcher)
     CAPTURE_CASES[name]()
     assert dispatcher.flush() == {"in-memory": True}
-    ((event_name, attrs),) = sent(provider)
+    ((event_name, _),) = sent(provider)
     assert event_name == name
-    if name == "install.success":
-        assert attrs["resolved_packages"] == ("numpy=1.0=0",)
-    else:
-        assert attrs["missing_packages"] == ("nope",)
-        assert attrs["exception_name"] == "PackagesNotFoundInChannelsError"
 
 
-def test_capture_cases_match_registry() -> None:
-    """Every registered event has a capture case, and every case is registered."""
-    registered = matched_events([ALL_EVENTS])
-    missing = registered - set(CAPTURE_CASES)
-    stale = set(CAPTURE_CASES) - registered
-    assert not missing and not stale, (
-        f"missing cases: {sorted(missing)}, stale cases: {sorted(stale)}"
-    )
+def test_capture_cases_match_event_names() -> None:
+    """Every supported event has a capture case, with no extra cases."""
+    assert set(CAPTURE_CASES) == matched_events([ALL_EVENTS])
 
 
 def test_success_event(

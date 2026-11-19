@@ -434,6 +434,7 @@ def test_no_matching_events_skips_pipeline(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """Start no pipeline and log nothing when the subscription matches no events."""
     if empty_catalog:
         monkeypatch.setattr(events, "SUPPORTED_COMMAND_OUTCOME_PAIRS", frozenset())
     provider = Provider("p", InMemoryLogRecordExporter(), events=subscription)
