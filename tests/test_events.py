@@ -16,9 +16,12 @@ from conda_otel.events import (
 )
 
 
+# FutureCommand and FutureOutcome (below) are used to simulate a future release of
+# conda-otel to verify the behavior is as expected for providers who opt-in
+# only for a subset of certain commands/outcome.
 class FutureCommand(StrEnum):
     INSTALL = "install"
-    CREATE = "create"
+    EXAMPLE = "example"  # Simulate a new command without using a real conda command.
 
 
 class FutureOutcome(StrEnum):
@@ -28,8 +31,8 @@ class FutureOutcome(StrEnum):
 
 
 @pytest.fixture
-def future_registry(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Swap in test-only enums. The registry starts with the production pairs."""
+def future_event_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Swap in test-only enums and keep the production pairs initially."""
     monkeypatch.setattr(events, "Command", FutureCommand)
     monkeypatch.setattr(events, "Outcome", FutureOutcome)
     monkeypatch.setattr(
@@ -60,7 +63,7 @@ def test_for_command_matches_all_outcomes_of_command() -> None:
 
 
 def test_for_outcome_matches_all_commands_with_outcome(
-    future_registry: None, monkeypatch: pytest.MonkeyPatch
+    future_event_catalog: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """An outcome selector matches that outcome for every command."""
     monkeypatch.setattr(
@@ -69,19 +72,19 @@ def test_for_outcome_matches_all_commands_with_outcome(
         frozenset(
             {
                 (FutureCommand.INSTALL, FutureOutcome.SUCCESS),
-                (FutureCommand.CREATE, FutureOutcome.SUCCESS),
-                (FutureCommand.CREATE, FutureOutcome.FAILED),
+                (FutureCommand.EXAMPLE, FutureOutcome.SUCCESS),
+                (FutureCommand.EXAMPLE, FutureOutcome.FAILED),
             }
         ),
     )
     assert matched_events([EventSelector.for_outcome(FutureOutcome.SUCCESS)]) == {
         "install.success",
-        "create.success",
+        "example.success",
     }
 
 
-def test_all_events_matches_every_registry_pair() -> None:
-    """The wildcard matches every registry pair."""
+def test_all_events_matches_every_supported_pair() -> None:
+    """The wildcard matches every supported pair."""
     assert matched_events([ALL_EVENTS]) == {
         "install.success",
         "install.packages_not_found",
@@ -116,40 +119,42 @@ def test_empty_declaration_matches_nothing() -> None:
 
 
 def test_event_name_literal_values() -> None:
-    """EventName values are the wire-facing neutral names."""
+    """Check the exact names used for install events."""
     assert EventName.SUCCESS == "install.success"
     assert EventName.PACKAGES_NOT_FOUND == "install.packages_not_found"
 
 
-def test_event_names_match_registry() -> None:
-    """Every registry pair has an EventName, and no EventName is stale."""
+def test_event_names_match_supported_pairs() -> None:
+    """Every supported pair has an EventName, and no EventName is stale."""
     names = {e.value for e in EventName}
-    registry = matched_events([ALL_EVENTS])
-    missing = sorted(registry - names)
-    extra = sorted(names - registry)
-    assert names == registry, f"missing from EventName: {missing}; extra: {extra}"
+    supported_names = matched_events([ALL_EVENTS])
+    missing = sorted(supported_names - names)
+    extra = sorted(names - supported_names)
+    assert names == supported_names, (
+        f"missing from EventName: {missing}; extra: {extra}"
+    )
 
 
 def test_supported_pairs_are_strict_subset_of_cross_product(
-    future_registry: None,
+    future_event_catalog: None,
 ) -> None:
     """Not every command and outcome pair is supported."""
     cross_product = frozenset(product(FutureCommand, FutureOutcome))
     assert events.SUPPORTED_COMMAND_OUTCOME_PAIRS < cross_product
 
 
-def test_unregistered_exact_pair_raises(future_registry: None) -> None:
+def test_unsupported_exact_pair_raises(future_event_catalog: None) -> None:
     """An exact selector for an unsupported pair is rejected."""
     with pytest.raises(ValueError):
         matched_events(
             [
                 EventSelector.for_command(FutureCommand.INSTALL),
-                EventSelector.exact(FutureCommand.CREATE, FutureOutcome.SUCCESS),
+                EventSelector.exact(FutureCommand.EXAMPLE, FutureOutcome.SUCCESS),
             ]
         )
 
 
-def test_for_outcome_without_registered_pairs_is_empty(future_registry: None) -> None:
+def test_for_outcome_with_no_matches(future_event_catalog: None) -> None:
     """A wildcard with no matching pairs is valid and matches nothing."""
     assert (
         matched_events([EventSelector.for_outcome(FutureOutcome.FAILED)]) == frozenset()
@@ -157,9 +162,9 @@ def test_for_outcome_without_registered_pairs_is_empty(future_registry: None) ->
 
 
 def test_growth_only_adds_intended_matches(
-    future_registry: None, monkeypatch: pytest.MonkeyPatch
+    future_event_catalog: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """New registry pairs reach only the wildcards that should match them."""
+    """Newly supported pairs match only the applicable wildcards."""
     exact = [EventSelector.exact(FutureCommand.INSTALL, FutureOutcome.SUCCESS)]
     by_command = [EventSelector.for_command(FutureCommand.INSTALL)]
     by_outcome = [EventSelector.for_outcome(FutureOutcome.SUCCESS)]
@@ -180,8 +185,8 @@ def test_growth_only_adds_intended_matches(
                 (FutureCommand.INSTALL, FutureOutcome.SUCCESS),
                 (FutureCommand.INSTALL, FutureOutcome.PACKAGES_NOT_FOUND),
                 (FutureCommand.INSTALL, FutureOutcome.FAILED),
-                (FutureCommand.CREATE, FutureOutcome.SUCCESS),
-                (FutureCommand.CREATE, FutureOutcome.FAILED),
+                (FutureCommand.EXAMPLE, FutureOutcome.SUCCESS),
+                (FutureCommand.EXAMPLE, FutureOutcome.FAILED),
             }
         ),
     )
@@ -195,8 +200,12 @@ def test_growth_only_adds_intended_matches(
 
     assert after[0] == before[0]
     assert after[1] == before[1] | {"install.failed"}
-    assert after[2] == before[2] | {"create.success"}
-    assert after[3] == before[3] | {"install.failed", "create.success", "create.failed"}
+    assert after[2] == before[2] | {"example.success"}
+    assert after[3] == before[3] | {
+        "install.failed",
+        "example.success",
+        "example.failed",
+    }
 
 
 @pytest.mark.parametrize(

@@ -78,6 +78,7 @@ def test_global_logger_provider_is_not_used(in_memory: Provider) -> None:
 
 def test_transform_is_per_provider_and_can_drop(in_memory: Provider) -> None:
     """Each provider changes or drops the event on its own copy."""
+    # Get the class of the fixture's exporter.
     exporter_class = in_memory.exporter.__class__
     dropping = Provider(
         "dropping", exporter_class(), events=SUCCESS_ONLY, transform=lambda e: None
@@ -182,10 +183,11 @@ class FailsAfterYieldPlugin:
 def test_conda_plugin_provider_is_discovered(in_memory: Provider) -> None:
     """An ordinary conda plugin supplies a provider through the core hook."""
     context = make_context(ValidPlugin(in_memory))
+    dummy_data = {"a": 1}
     dispatcher = Dispatcher(core.load_providers(context))
-    dispatcher.emit(Event(EventName.SUCCESS, {"a": 1}))
+    dispatcher.emit(Event(EventName.SUCCESS, dummy_data))
     assert dispatcher.flush() == {"in-memory": True}
-    assert records(in_memory) == [{"a": 1}]
+    assert records(in_memory) == [dummy_data]
     # A second call must not register the hookspec again.
     assert core.load_providers(context) == [in_memory]
 
@@ -342,10 +344,11 @@ def test_events_are_required() -> None:
 def test_matching_event_is_exported() -> None:
     """An event that the provider subscribed to is exported."""
     provider = Provider("p", InMemoryLogRecordExporter(), events=SUCCESS_ONLY)
+    dummy_data = {"a": 1}
     dispatcher = Dispatcher([provider])
-    dispatcher.emit(Event(EventName.SUCCESS, {"a": 1}))
+    dispatcher.emit(Event(EventName.SUCCESS, dummy_data))
     dispatcher.flush()
-    assert records(provider) == [{"a": 1}]
+    assert records(provider) == [dummy_data]
 
 
 def test_non_matching_event_never_reaches_the_provider() -> None:
@@ -404,7 +407,7 @@ def test_all_events_does_not_match_unregistered_events() -> None:
     [
         "",
         [ALL_EVENTS, "x"],
-        [EventSelector.exact(Command.INSTALL, "bogus")],
+        [EventSelector.exact(Command.INSTALL, "foobar")],
         [EventSelector.for_command(None)],
     ],
 )
@@ -420,9 +423,10 @@ def test_invalid_declaration_skips_only_that_provider(
     assert len(warnings) == 1
     assert "bad" in warnings[0].getMessage()
     assert [p.provider.name for p in dispatcher.pipelines] == ["in-memory"]
-    dispatcher.emit(Event(EventName.SUCCESS, {"a": 1}))
+    dummy_data = {"a": 1}
+    dispatcher.emit(Event(EventName.SUCCESS, dummy_data))
     assert dispatcher.flush() == {"in-memory": True}
-    assert records(in_memory) == [{"a": 1}]
+    assert records(in_memory) == [dummy_data]
 
 
 def test_empty_declaration_starts_no_pipeline_and_logs_nothing(
