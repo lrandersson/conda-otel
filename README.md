@@ -88,6 +88,23 @@ frozenset({'install.success'})
 
 If the declaration is invalid, conda-otel logs a warning and skips that provider; the others keep running.
 
+## What providers receive
+
+The core checks these attributes before any provider transform runs.
+
+| Attribute | Events | What conda-otel does |
+| --- | --- | --- |
+| `command` | Both install events | Allows only `install`. |
+| `channels` | Both install events | Removes URL userinfo, `/t/<token>` pairs, queries and fragments; replaces local paths with `<local>` and unparsable URLs with `<invalid>`. Keeps channel names and other URL parts. |
+| `channel_priority` | Both install events | Allows only `strict`, `flexible` and `disabled`. |
+| `requested_packages` | Both install events | Reduces specs to exact names matching `[a-z0-9_.-]+`; drops the list if any spec fails. Checks names again before dispatch. |
+| `resolved_packages` | `install.success` | Keeps `name=version=build` values from package metadata unchanged. |
+| `missing_packages` | `install.packages_not_found` | Applies the same exact-name checks as `requested_packages`. |
+| `exception_name` | `install.packages_not_found` | Allows only `PackagesNotFoundInChannelsError`; maps an unknown subclass to its nearest known parent. |
+
+Undeclared attributes are dropped.
+Providers also get the full conda `context` in `conda_otel_providers` and must not send raw values from it.
+
 ## License
 
 BSD 3-Clause. See [LICENSE](LICENSE).
