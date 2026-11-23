@@ -49,7 +49,9 @@ RAW_ATTRIBUTES = {
     "channel_priority": "flexible",
     "requested_packages": [PACKAGE],
     "resolved_packages": [RECORD],
-    "missing_packages": ["https://user:SECRET@host.example/x-1.0-0.conda"],  # URL, not a name
+    "missing_packages": [
+        "https://user:SECRET@host.example/x-1.0-0.conda"
+    ],  # URL, not a name
     "exception_name": "FooPluginError",  # not in the allowlist
     "undeclared": SECRET,
 }
@@ -68,17 +70,51 @@ SANITIZED_ATTRIBUTES = {
         pytest.param("conda-forge", "conda-forge", id="name"),
         pytest.param("local", "local", id="name-local"),  # conda's local build channel
         pytest.param("conda-forge/label/dev", "conda-forge/label/dev", id="name-label"),
-        pytest.param("https://host.example/chan", "https://host.example/chan", id="url-plain"),
+        pytest.param(
+            "https://host.example/chan", "https://host.example/chan", id="url-plain"
+        ),
         pytest.param(RAW_CHANNELS[0], REDACTED_CHANNELS[0], id="userinfo"),
         # conda's own token pattern misses "_" and ".".
-        pytest.param("https://host.example/t/SECRET_TO.KEN/chan", "https://host.example/chan", id="token"),
-        pytest.param("https://host.example/prefix/t/SECRET/chan", "https://host.example/prefix/chan", id="token-after-prefix"),
-        pytest.param("https://host.example/chan?token=SECRET#SECRET", "https://host.example/chan", id="query-fragment"),
-        pytest.param("https://user:SECRET@host.example:1234/t/SECRET/chan/label/dev?x=SECRET", "https://host.example:1234/chan/label/dev", id="all-with-port"),
-        pytest.param("HTTPS://user:SECRET@Host.example/chan", "https://Host.example/chan", id="upper-scheme"),  # urlsplit lowercases the scheme
-        pytest.param("https://us@er:SECRET@host.example/chan", "https://host.example/chan", id="userinfo-two-at"),  # split at the last @
-        pytest.param("http://user:SECRET@[::1]:1234/t/SECRET/chan", "http://[::1]:1234/chan", id="ipv6"),
-        pytest.param("user:SECRET@host.example/t/SECRET/chan?x=SECRET", "host.example/chan", id="no-scheme"),
+        pytest.param(
+            "https://host.example/t/SECRET_TO.KEN/chan",
+            "https://host.example/chan",
+            id="token",
+        ),
+        pytest.param(
+            "https://host.example/prefix/t/SECRET/chan",
+            "https://host.example/prefix/chan",
+            id="token-after-prefix",
+        ),
+        pytest.param(
+            "https://host.example/chan?token=SECRET#SECRET",
+            "https://host.example/chan",
+            id="query-fragment",
+        ),
+        pytest.param(
+            "https://user:SECRET@host.example:1234/t/SECRET/chan/label/dev?x=SECRET",
+            "https://host.example:1234/chan/label/dev",
+            id="all-with-port",
+        ),
+        pytest.param(
+            "HTTPS://user:SECRET@Host.example/chan",
+            "https://Host.example/chan",
+            id="upper-scheme",
+        ),  # urlsplit lowercases the scheme
+        pytest.param(
+            "https://us@er:SECRET@host.example/chan",
+            "https://host.example/chan",
+            id="userinfo-two-at",
+        ),  # split at the last @
+        pytest.param(
+            "http://user:SECRET@[::1]:1234/t/SECRET/chan",
+            "http://[::1]:1234/chan",
+            id="ipv6",
+        ),
+        pytest.param(
+            "user:SECRET@host.example/t/SECRET/chan?x=SECRET",
+            "host.example/chan",
+            id="no-scheme",
+        ),
         pytest.param(RAW_CHANNELS[3], "<local>", id="file-url"),
         pytest.param("FILE:///C:/SECRET", "<local>", id="file-url-upper"),
         pytest.param("/home/SECRET/chan", "<local>", id="posix"),
@@ -122,8 +158,10 @@ def test_emit_sanitizes_before_transform(
         dispatcher.flush()
     assert [event.attributes for event in seen] == [SANITIZED_ATTRIBUTES]
     assert records(in_memory) == [
-        {key: tuple(value) if isinstance(value, list) else value
-         for key, value in SANITIZED_ATTRIBUTES.items()}
+        {
+            key: tuple(value) if isinstance(value, list) else value
+            for key, value in SANITIZED_ATTRIBUTES.items()
+        }
     ]
     assert "undeclared" in caplog.text
     assert SECRET not in caplog.text
@@ -156,8 +194,12 @@ def test_emit_adds_event_name_and_drops_non_scalar_values() -> None:
     """The event name is added. Nested and mixed-type values are dropped."""
     # clean_attributes runs after the transform, so these keys reach it.
     provider = Provider(
-        "p", InMemoryLogRecordExporter(), events=SUCCESS_ONLY,
-        transform=lambda e: Event(e.name, {"a": 1, "nested": {"x": 1}, "mixed": [1, "a"], "ok": ["a"]}),
+        "p",
+        InMemoryLogRecordExporter(),
+        events=SUCCESS_ONLY,
+        transform=lambda e: Event(
+            e.name, {"a": 1, "nested": {"x": 1}, "mixed": [1, "a"], "ok": ["a"]}
+        ),
     )
     dispatcher = Dispatcher([provider])
     dispatcher.emit(Event(EventName.SUCCESS))
@@ -391,7 +433,8 @@ def test_attribute_limit_variables_set_before_start_are_ignored() -> None:
         "sel = EventSelector.exact(Command.INSTALL, Outcome.SUCCESS)\n"
         "p = Provider('m', InMemoryLogRecordExporter(), events=[sel])\n"
         "d = Dispatcher([p])\n"
-        "d.emit(Event(EventName.SUCCESS, {'command': 'install', 'channel_priority': 'flexible'}))\n"
+        "d.emit(Event(EventName.SUCCESS, "
+        "{'command': 'install', 'channel_priority': 'flexible'}))\n"
         "d.flush()\n"
         "(r,) = p.exporter.get_finished_logs()\n"
         "print(sorted(r.log_record.attributes.items()))\n"

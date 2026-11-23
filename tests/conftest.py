@@ -6,7 +6,6 @@ from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter
 from conda_otel.core import Provider
 from conda_otel.events import Command, EventSelector, Outcome
 
-
 # Synthetic test data. Every secret contains SECRET.
 #: Marker for a substring check that finds any leak.
 SECRET = "SECRET"

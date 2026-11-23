@@ -12,7 +12,13 @@ from conda.exceptions import InvalidMatchSpec, PackagesNotFoundInChannelsError
 from conda.models.match_spec import MatchSpec
 
 from conda_otel import sources
-from conda_otel.core import KNOWN_EXCEPTIONS, PACKAGE_NAME, Dispatcher, Event, load_providers
+from conda_otel.core import (
+    KNOWN_EXCEPTIONS,
+    PACKAGE_NAME,
+    Dispatcher,
+    Event,
+    load_providers,
+)
 from conda_otel.events import EventName
 
 if TYPE_CHECKING:
@@ -61,11 +67,7 @@ def package_names(specs: list[Any]) -> list[str] | None:
         except InvalidMatchSpec:
             return None
         name = spec.get_exact_value("name")
-        if (
-            spec.get_raw_value("url")
-            or not name
-            or not PACKAGE_NAME.fullmatch(name)
-        ):
+        if spec.get_raw_value("url") or not name or not PACKAGE_NAME.fullmatch(name):
             return None
         names.add(name)
     return sorted(names)
@@ -156,9 +158,10 @@ def report_error(event: CondaExceptionEvent) -> None:
                     "channel_priority": str(context.channel_priority),
                     "requested_packages": request.requested_names,
                     "missing_packages": missing,
-                    # nearest known parent; the isinstance check above guarantees a match
+                    # The isinstance check guarantees a known parent.
                     "exception_name": next(
-                        c.__name__ for c in event.exc_type.__mro__
+                        c.__name__
+                        for c in event.exc_type.__mro__
                         if c.__name__ in KNOWN_EXCEPTIONS
                     ),
                 },

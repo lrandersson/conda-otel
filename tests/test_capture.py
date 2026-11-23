@@ -26,7 +26,8 @@ if TYPE_CHECKING:
 
 
 # Synthetic test data. Every secret contains SECRET.
-SPEC_WITH_CHANNEL = "https://user:SECRET@host.example/t/SECRET/chan::numpy"  # channel::package spec; the channel part must not reach package names
+# channel::package spec; the channel part must not reach package names
+SPEC_WITH_CHANNEL = "https://user:SECRET@host.example/t/SECRET/chan::numpy"
 
 
 # a plugin may raise its own subclass
@@ -156,10 +157,12 @@ def test_success_event(
     ],
 )
 def test_packages_not_found_event(
-    ctx: SimpleNamespace, dispatcher: Dispatcher, in_memory: Provider,
+    ctx: SimpleNamespace,
+    dispatcher: Dispatcher,
+    in_memory: Provider,
     raised_class: type[PackagesNotFoundInChannelsError],
 ) -> None:
-    """Missing packages send one event with a known exception name and clear the state."""
+    """Missing packages send a known exception name and clear the state."""
     run_install(["nope"])
     exc = raised_class(["nope"], ["conda-forge"])
     event = SimpleNamespace(exc_value=exc, exc_type=type(exc), channels=("from-event",))
@@ -177,8 +180,10 @@ def test_packages_not_found_event(
     "name", [pytest.param(name, id=name) for name in CAPTURE_CASES]
 )
 def test_capture_sends_only_declared_attributes(
-    ctx: SimpleNamespace, dispatcher: Dispatcher,
-    monkeypatch: pytest.MonkeyPatch, name: str,
+    ctx: SimpleNamespace,
+    dispatcher: Dispatcher,
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
 ) -> None:
     """Capture produces no attribute that the core table does not declare."""
     seen = []

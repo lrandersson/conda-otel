@@ -144,15 +144,19 @@ def redact_channel(value: str) -> str:
 
 def checked_package_names(value: Any) -> Any:
     """Keep package names only when every item matches the name check."""
-    return value if all(
-        isinstance(name, str) and PACKAGE_NAME.fullmatch(name) for name in value
-    ) else None
+    return (
+        value
+        if all(isinstance(name, str) and PACKAGE_NAME.fullmatch(name) for name in value)
+        else None
+    )
 
 
 ATTRIBUTES: dict[str, Callable[[Any], Any]] = {
     "command": lambda v: v if v in {"install"} else None,
     "channels": lambda v: [redact_channel(c) for c in v],
-    "channel_priority": lambda v: v if v in {"strict", "flexible", "disabled"} else None,
+    "channel_priority": lambda v: (
+        v if v in {"strict", "flexible", "disabled"} else None
+    ),
     "requested_packages": checked_package_names,
     "missing_packages": checked_package_names,
     # These values come from package metadata, not user input.
