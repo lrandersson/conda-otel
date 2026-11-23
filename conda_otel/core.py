@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
+from enum import StrEnum
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 import pluggy
 
@@ -39,10 +42,11 @@ class ProviderSpecs:
 class Event:
     """A vendor-neutral event.
 
-    `attributes` holds the raw values from conda. conda-otel does not redact them,
-    so each provider must redact them before it sends them. For install events the
-    keys are: command, channels, channel_priority, requested_packages,
-    resolved_packages (success), missing_packages and exception_name (not found).
+    conda-otel removes credentials and local paths from `channels` before dispatch.
+    It sends only declared attributes and known values for `command`,
+    `channel_priority` and `exception_name`. Package names are exact names.
+    Other values are as conda holds them. Providers also receive the full conda
+    `context` in their hook.
     """
 
     name: str
@@ -104,6 +108,77 @@ def clean_attributes(attributes: dict[str, Any]) -> dict[str, Any]:
     return cleaned
 
 
+class Redacted(StrEnum):
+    """Markers for values that must not reach providers."""
+
+    LOCAL = "<local>"
+    INVALID = "<invalid>"
+
+
+PACKAGE_NAME: re.Pattern[str] = re.compile(r"[a-z0-9_.-]+")
+KNOWN_EXCEPTIONS: frozenset[str] = frozenset({"PackagesNotFoundInChannelsError"})
+
+
+def redact_channel(value: str) -> str:
+    """Remove URL credentials and replace local paths and invalid URLs."""
+    if (
+        value.lower().startswith("file:")
+        or value.startswith(("/", "\\", ".", "~"))
+        or re.match(r"[A-Za-z]:", value)
+    ):
+        return Redacted.LOCAL.value
+    if "://" in value:
+        try:
+            url = urlsplit(value)
+            url.port
+            if not url.hostname:
+                return Redacted.INVALID.value
+        except ValueError:
+            return Redacted.INVALID.value
+        path = re.sub(r"/t/[^/]+", "", url.path)
+        return f"{url.scheme}://{url.netloc.rpartition('@')[2]}{path}"
+    value = re.split(r"[?#]", value, maxsplit=1)[0]
+    host, separator, path = value.partition("/")
+    return host.rpartition("@")[2] + re.sub(r"/t/[^/]+", "", separator + path)
+
+
+def checked_package_names(value: Any) -> Any:
+    """Keep package names only when every item matches the name check."""
+    return value if all(
+        isinstance(name, str) and PACKAGE_NAME.fullmatch(name) for name in value
+    ) else None
+
+
+ATTRIBUTES: dict[str, Callable[[Any], Any]] = {
+    "command": lambda v: v if v in {"install"} else None,
+    "channels": lambda v: [redact_channel(c) for c in v],
+    "channel_priority": lambda v: v if v in {"strict", "flexible", "disabled"} else None,
+    "requested_packages": checked_package_names,
+    "missing_packages": checked_package_names,
+    # These values come from package metadata, not user input.
+    "resolved_packages": lambda v: v,
+    "exception_name": lambda v: v if v in KNOWN_EXCEPTIONS else None,
+}
+
+
+def sanitize_attributes(attributes: dict[str, Any]) -> dict[str, Any]:
+    """Keep declared attributes whose sanitizers return a value."""
+    sanitized = {}
+    for key, value in attributes.items():
+        sanitizer = ATTRIBUTES.get(key)
+        safe = None
+        if sanitizer is not None and value is not None:
+            try:
+                safe = sanitizer(value)
+            except Exception:
+                pass
+        if safe is None:
+            logger.debug("Dropping attribute %s", key)
+        else:
+            sanitized[key] = safe
+    return sanitized
+
+
 def load_providers(context: Context) -> list[Provider]:
     """Discover providers registered with conda's plugin manager.
 
@@ -160,10 +235,11 @@ class Dispatcher:
 
         A provider whose transform returns None does not get the event.
         """
+        attributes = sanitize_attributes(event.attributes)
         for pipe in self.pipelines:
             if event.name not in pipe.events:
                 continue
-            copy = replace(event, attributes=dict(event.attributes))
+            copy = replace(event, attributes=dict(attributes))
             if pipe.provider.transform is not None:
                 copy = pipe.provider.transform(copy)
                 if copy is None:
