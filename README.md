@@ -90,7 +90,7 @@ If the declaration is invalid, conda-otel logs a warning and skips that provider
 
 ## What providers receive
 
-The core checks these attributes before any provider transform runs.
+The core checks these attributes before calling any provider transform.
 
 | Attribute | Events | What conda-otel does |
 | --- | --- | --- |

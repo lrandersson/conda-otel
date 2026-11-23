@@ -109,7 +109,7 @@ def clean_attributes(attributes: dict[str, Any]) -> dict[str, Any]:
 
 
 class Redacted(StrEnum):
-    """Markers for values that must not reach providers."""
+    """Replacement markers for local paths and invalid URLs."""
 
     LOCAL = "<local>"
     INVALID = "<invalid>"

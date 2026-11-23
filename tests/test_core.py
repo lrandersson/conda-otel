@@ -142,7 +142,7 @@ def test_redact_channel(value: str, expected: str) -> None:
 def test_emit_sanitizes_before_transform(
     in_memory: Provider, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Providers get only declared, clean attributes, and the log names no value."""
+    """Providers get sanitized attributes; drop logs name keys, never values."""
     assert set(RAW_ATTRIBUTES) - {"undeclared"} == set(core.ATTRIBUTES)
     seen = []
 
