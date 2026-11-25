@@ -97,9 +97,9 @@ The core checks these attributes before calling any provider transform.
 | `command` | Both install events | Allows only `install`. |
 | `channels` | Both install events | Removes URL userinfo, `/t/<token>` pairs, queries and fragments; replaces local paths with `<local>` and unparsable URLs with `<invalid>`. Keeps channel names and other URL parts. |
 | `channel_priority` | Both install events | Allows only `strict`, `flexible` and `disabled`. |
-| `requested_packages` | Both install events | Reduces specs to exact names matching `[a-z0-9_.-]+`; drops the list if any spec fails. Checks names again before dispatch. |
+| `requested_packages` | Both install events | Reduces specs to exact names matching `[a-z0-9_.-]+`; capture skips the event if any spec fails. The core checks names again and drops an invalid list before dispatch. |
 | `resolved_packages` | `install.success` | Keeps `name=version=build` values from package metadata unchanged. |
-| `missing_packages` | `install.packages_not_found` | Applies the same exact-name checks as `requested_packages`. |
+| `missing_packages` | `install.packages_not_found` | Applies the same exact-name checks as `requested_packages`; capture skips the error event if any missing spec fails. |
 | `exception_name` | `install.packages_not_found` | Allows only `PackagesNotFoundInChannelsError`; maps an unknown subclass to its nearest known parent. |
 
 Undeclared attributes are dropped.

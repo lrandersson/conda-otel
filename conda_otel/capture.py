@@ -13,7 +13,6 @@ from conda.models.match_spec import MatchSpec
 
 from conda_otel import sources
 from conda_otel.core import (
-    KNOWN_EXCEPTIONS,
     PACKAGE_NAME,
     Dispatcher,
     Event,
@@ -158,12 +157,7 @@ def report_error(event: CondaExceptionEvent) -> None:
                     "channel_priority": str(context.channel_priority),
                     "requested_packages": request.requested_names,
                     "missing_packages": missing,
-                    # The isinstance check guarantees a known parent.
-                    "exception_name": next(
-                        c.__name__
-                        for c in event.exc_type.__mro__
-                        if c.__name__ in KNOWN_EXCEPTIONS
-                    ),
+                    "exception_name": PackagesNotFoundInChannelsError.__name__,
                 },
             )
         )

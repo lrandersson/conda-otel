@@ -80,7 +80,78 @@ SANITIZED_ATTRIBUTES = {
             "https://host.example/chan",
             id="token",
         ),
+        pytest.param(
+            "https://host.example/%74/SECRET/chan",
+            "https://host.example/chan",
+            id="encoded-token-marker",
+        ),
+        pytest.param(
+            "https://host.example/t%2FSECRET/chan",
+            "https://host.example/chan",
+            id="encoded-token-separator",
+        ),
+        pytest.param(
+            "https://host.example/t%2fSECRET/chan",
+            "https://host.example/chan",
+            id="encoded-token-separator-lower-hex",
+        ),
+        pytest.param(
+            "https://host.example/label/a%20b%2F%74%2FSECRET/chan",
+            "https://host.example/label/a%20b/chan",
+            id="encoded-token-after-prefix",
+        ),
+        pytest.param(
+            "https://host.example/t/SECRET%2Fchan/label/a%20b",
+            "https://host.example/chan/label/a%20b",
+            id="encoded-token-end-boundary",
+        ),
+        pytest.param(
+            "https://host.example/prefix/t/SECRET%2Fchan/label/a%20b",
+            "https://host.example/prefix%2Fchan/label/a%20b",
+            id="encoded-remainder-preserved",
+        ),
+        pytest.param(
+            "https://host.example/t/SECRET%2ft%2FSECRET/chan",
+            "https://host.example/chan",
+            id="encoded-repeated-tokens",
+        ),
+        pytest.param(
+            "https://host.example/label/a%20b",
+            "https://host.example/label/a%20b",
+            id="encoded-ordinary-path",
+        ),
+        pytest.param(
+            "https://host.example/%2Flabel/a%20b",
+            "https://host.example/%2Flabel/a%20b",
+            id="encoded-leading-ordinary-path",
+        ),
+        pytest.param(
+            "https://host.example/%2Flabel/a%20b/t/SECRET",
+            "https://host.example/%2Flabel/a%20b",
+            id="encoded-leading-path-with-ending-token",
+        ),
+        pytest.param(
+            "https://host.example/T/visible/%54/visible/chan",
+            "https://host.example/T/visible/%54/visible/chan",
+            id="uppercase-token-marker-is-ordinary",
+        ),
+        pytest.param(
+            "https://host.example/%2574/visible/t%252Fvisible/chan",
+            "https://host.example/%2574/visible/t%252Fvisible/chan",
+            id="no-recursive-decoding",
+        ),
         pytest.param("t/SECRET/chan", "chan", id="leading-token"),
+        # Conda treats these synthetic token/userinfo combinations as channel names.
+        pytest.param(
+            "t/SECRET/user:SECRET@host.example/chan",
+            "host.example/chan",
+            id="leading-token-then-userinfo",
+        ),
+        pytest.param(
+            "user:SECRET@t/SECRET/chan",
+            "chan",
+            id="userinfo-then-leading-token",
+        ),
         pytest.param(
             "https://host.example/prefix/t/SECRET/chan",
             "https://host.example/prefix/chan",
@@ -138,6 +209,7 @@ def test_redact_channel(value: str, expected: str) -> None:
     result = core.redact_channel(value)
     assert result == expected
     assert type(result) is str
+    assert core.redact_channel(result) == result
 
 
 def test_emit_sanitizes_before_transform(
@@ -185,6 +257,38 @@ def test_emit_sanitizes_before_transform(
 def test_bad_values_are_dropped(key: str, value: Any) -> None:
     """A value that fails its check is dropped and does not raise."""
     assert key not in core.sanitize_attributes({key: value})
+
+
+@pytest.mark.parametrize("key", ["requested_packages", "missing_packages"])
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        pytest.param({"numpy": "SECRET"}, None, id="mapping"),
+        pytest.param("numpy", None, id="string"),
+        pytest.param(["numpy", "python"], ["numpy", "python"], id="list"),
+        pytest.param(("numpy", "python"), ("numpy", "python"), id="tuple"),
+        pytest.param([], [], id="empty-list"),
+        pytest.param((), (), id="empty-tuple"),
+        pytest.param(["numpy", 1234], None, id="invalid-item"),
+        pytest.param(("numpy", "python\n"), None, id="partial-name-match"),
+    ],
+)
+def test_package_names_are_checked_before_transform(
+    in_memory: Provider, key: str, value: Any, expected: Any
+) -> None:
+    """Providers receive only lists or tuples of valid package names."""
+    # These malformed direct API inputs are synthetic; normal capture supplies lists.
+    seen = []
+
+    def transform(event: Event) -> Event:
+        """Record the provider input before export cleanup."""
+        seen.append(event.attributes)
+        return event
+
+    in_memory.transform = transform
+    dispatcher = Dispatcher([in_memory])
+    dispatcher.emit(Event(EventName.SUCCESS, {key: value}))
+    assert seen == [{} if expected is None else {key: expected}]
 
 
 def records(provider: Provider) -> list[dict[str, Any]]:

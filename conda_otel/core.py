@@ -115,6 +115,7 @@ class Redacted(StrEnum):
     INVALID = "<invalid>"
 
 
+# Keep raw package specs and arbitrary exception names out of telemetry.
 PACKAGE_NAME: re.Pattern[str] = re.compile(r"[a-z0-9_.-]+")
 KNOWN_EXCEPTIONS: frozenset[str] = frozenset({"PackagesNotFoundInChannelsError"})
 
@@ -135,29 +136,42 @@ def redact_channel(value: str) -> str:
                 return Redacted.INVALID.value
         except ValueError:
             return Redacted.INVALID.value
-        path = re.sub(r"/t/[^/]+", "", url.path)
+        # Match /t/<token>, including %74 for t and %2F for /.
+        # Stop the token at a literal or encoded /; keep other encoding unchanged.
+        path = re.sub(
+            r"(?:/|%2[fF])(?:t|%74)(?:/|%2[fF])(?:(?!%2[fF])[^/])+",
+            "",
+            url.path,
+        )
+        # Removing the first token can expose %2Fchan; restore its path separator.
+        if path.startswith(("%2F", "%2f")):
+            path = "/" + path[3:]
         return f"{url.scheme}://{url.netloc.rpartition('@')[2]}{path}"
     value = re.split(r"[?#]", value, maxsplit=1)[0]
     if value.startswith("t/"):
-        # We use this approach over split_anaconda_token since
-        # it doesn't meet our redaction requirements.
-        return re.sub(r"/t/[^/]+", "", "/" + value).removeprefix("/")
+        # Remove whole token segments; split_anaconda_token misses dots and underscores.
+        value = re.sub(r"/t/[^/]+", "", "/" + value).removeprefix("/")
     host, separator, path = value.partition("/")
-    return host.rpartition("@")[2] + re.sub(r"/t/[^/]+", "", separator + path)
+    value = host.rpartition("@")[2] + separator + path
+    return re.sub(r"/t/[^/]+", "", "/" + value).removeprefix("/")
 
 
 def checked_package_names(value: Any) -> Any:
     """Keep package names only when every item matches the name check."""
+    # Reject malformed direct API input; normal capture supplies lists.
     return (
         value
-        if all(isinstance(name, str) and PACKAGE_NAME.fullmatch(name) for name in value)
+        if isinstance(value, (list, tuple))
+        and all(
+            isinstance(name, str) and PACKAGE_NAME.fullmatch(name) for name in value
+        )
         else None
     )
 
 
 ATTRIBUTES: dict[str, Callable[[Any], Any]] = {
     "command": lambda v: v if v in {"install"} else None,
-    # If the channel is a string the input shape is wrong, therefore drop it.
+    # Reject a bare string instead of treating its characters as channels.
     "channels": lambda v: (
         None if isinstance(v, str) else [redact_channel(c) for c in v]
     ),
