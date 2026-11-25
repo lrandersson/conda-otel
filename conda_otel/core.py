@@ -138,6 +138,10 @@ def redact_channel(value: str) -> str:
         path = re.sub(r"/t/[^/]+", "", url.path)
         return f"{url.scheme}://{url.netloc.rpartition('@')[2]}{path}"
     value = re.split(r"[?#]", value, maxsplit=1)[0]
+    if value.startswith("t/"):
+        # We use this approach over split_anaconda_token since
+        # it doesn't meet our redaction requirements.
+        return re.sub(r"/t/[^/]+", "", "/" + value).removeprefix("/")
     host, separator, path = value.partition("/")
     return host.rpartition("@")[2] + re.sub(r"/t/[^/]+", "", separator + path)
 
@@ -153,7 +157,10 @@ def checked_package_names(value: Any) -> Any:
 
 ATTRIBUTES: dict[str, Callable[[Any], Any]] = {
     "command": lambda v: v if v in {"install"} else None,
-    "channels": lambda v: [redact_channel(c) for c in v],
+    # If the channel is a string the input shape is wrong, therefore drop it.
+    "channels": lambda v: (
+        None if isinstance(v, str) else [redact_channel(c) for c in v]
+    ),
     "channel_priority": lambda v: (
         v if v in {"strict", "flexible", "disabled"} else None
     ),

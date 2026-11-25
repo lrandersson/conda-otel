@@ -80,6 +80,7 @@ SANITIZED_ATTRIBUTES = {
             "https://host.example/chan",
             id="token",
         ),
+        pytest.param("t/SECRET/chan", "chan", id="leading-token"),
         pytest.param(
             "https://host.example/prefix/t/SECRET/chan",
             "https://host.example/prefix/chan",
@@ -176,6 +177,9 @@ def test_emit_sanitizes_before_transform(
         pytest.param("requested_packages", None, id="none"),
         pytest.param("requested_packages", [1234], id="not-a-string"),
         pytest.param("channels", [1234], id="channel-not-a-string"),
+        pytest.param(
+            "channels", "https://host.example/t/SECRET/chan", id="channels-string"
+        ),
     ],
 )
 def test_bad_values_are_dropped(key: str, value: Any) -> None:
