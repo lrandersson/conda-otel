@@ -13,6 +13,7 @@ import pluggy
 import pytest
 from conda.plugins import hookimpl
 from conda.plugins.manager import CondaPluginManager
+from conftest import RAW_CHANNELS, REDACTED_CHANNELS, SECRET
 from opentelemetry import _logs
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import (
@@ -38,6 +39,258 @@ if TYPE_CHECKING:
 SUCCESS_ONLY = [EventSelector.exact(Command.INSTALL, Outcome.SUCCESS)]
 
 
+# Synthetic test data. Every secret contains SECRET.
+PACKAGE = "numpy"
+ATTRS = {"command": "install", "channel_priority": "flexible"}
+RECORD = "numpy=1.0=0"  # resolved package as name=version=build
+RAW_ATTRIBUTES = {
+    "command": "install",
+    "channels": RAW_CHANNELS,
+    "channel_priority": "flexible",
+    "requested_packages": [PACKAGE],
+    "resolved_packages": [RECORD],
+    "missing_packages": [
+        "https://user:SECRET@host.example/x-1.0-0.conda"
+    ],  # URL, not a name
+    "exception_name": "FooPluginError",  # not in the allowlist
+    "undeclared": SECRET,
+}
+SANITIZED_ATTRIBUTES = {
+    "command": "install",
+    "channels": REDACTED_CHANNELS,
+    "channel_priority": "flexible",
+    "requested_packages": [PACKAGE],
+    "resolved_packages": [RECORD],
+}
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        pytest.param("conda-forge", "conda-forge", id="name"),
+        pytest.param("local", "local", id="name-local"),  # conda's local build channel
+        pytest.param("conda-forge/label/dev", "conda-forge/label/dev", id="name-label"),
+        pytest.param(
+            "https://host.example/chan", "https://host.example/chan", id="url-plain"
+        ),
+        pytest.param(RAW_CHANNELS[0], REDACTED_CHANNELS[0], id="userinfo"),
+        # conda's own token pattern misses "_" and ".".
+        pytest.param(
+            "https://host.example/t/SECRET_TO.KEN/chan",
+            "https://host.example/chan",
+            id="token",
+        ),
+        pytest.param(
+            "https://host.example/%74/SECRET/chan",
+            "https://host.example/chan",
+            id="encoded-token-marker",
+        ),
+        pytest.param(
+            "https://host.example/t%2FSECRET/chan",
+            "https://host.example/chan",
+            id="encoded-token-separator",
+        ),
+        pytest.param(
+            "https://host.example/t%2fSECRET/chan",
+            "https://host.example/chan",
+            id="encoded-token-separator-lower-hex",
+        ),
+        pytest.param(
+            "https://host.example/label/a%20b%2F%74%2FSECRET/chan",
+            "https://host.example/label/a%20b/chan",
+            id="encoded-token-after-prefix",
+        ),
+        pytest.param(
+            "https://host.example/t/SECRET%2Fchan/label/a%20b",
+            "https://host.example/chan/label/a%20b",
+            id="encoded-token-end-boundary",
+        ),
+        pytest.param(
+            "https://host.example/prefix/t/SECRET%2Fchan/label/a%20b",
+            "https://host.example/prefix%2Fchan/label/a%20b",
+            id="encoded-remainder-preserved",
+        ),
+        pytest.param(
+            "https://host.example/t/SECRET%2ft%2FSECRET/chan",
+            "https://host.example/chan",
+            id="encoded-repeated-tokens",
+        ),
+        pytest.param(
+            "https://host.example/label/a%20b",
+            "https://host.example/label/a%20b",
+            id="encoded-ordinary-path",
+        ),
+        pytest.param(
+            "https://host.example/%2Flabel/a%20b",
+            "https://host.example/%2Flabel/a%20b",
+            id="encoded-leading-ordinary-path",
+        ),
+        pytest.param(
+            "https://host.example/%2Flabel/a%20b/t/SECRET",
+            "https://host.example/%2Flabel/a%20b",
+            id="encoded-leading-path-with-ending-token",
+        ),
+        pytest.param(
+            "https://host.example/T/visible/%54/visible/chan",
+            "https://host.example/T/visible/%54/visible/chan",
+            id="uppercase-token-marker-is-ordinary",
+        ),
+        pytest.param(
+            "https://host.example/%2574/visible/t%252Fvisible/chan",
+            "https://host.example/%2574/visible/t%252Fvisible/chan",
+            id="no-recursive-decoding",
+        ),
+        pytest.param("t/SECRET/chan", "chan", id="leading-token"),
+        # Conda treats these synthetic token/userinfo combinations as channel names.
+        pytest.param(
+            "t/SECRET/user:SECRET@host.example/chan",
+            "host.example/chan",
+            id="leading-token-then-userinfo",
+        ),
+        pytest.param(
+            "user:SECRET@t/SECRET/chan",
+            "chan",
+            id="userinfo-then-leading-token",
+        ),
+        pytest.param(
+            "https://host.example/prefix/t/SECRET/chan",
+            "https://host.example/prefix/chan",
+            id="token-after-prefix",
+        ),
+        pytest.param(
+            "https://host.example/chan?token=SECRET#SECRET",
+            "https://host.example/chan",
+            id="query-fragment",
+        ),
+        pytest.param(
+            "https://user:SECRET@host.example:1234/t/SECRET/chan/label/dev?x=SECRET",
+            "https://host.example:1234/chan/label/dev",
+            id="all-with-port",
+        ),
+        pytest.param(
+            "HTTPS://user:SECRET@Host.example/chan",
+            "https://Host.example/chan",
+            id="upper-scheme",
+        ),  # urlsplit lowercases the scheme
+        pytest.param(
+            "https://us@er:SECRET@host.example/chan",
+            "https://host.example/chan",
+            id="userinfo-two-at",
+        ),  # split at the last @
+        pytest.param(
+            "http://user:SECRET@[::1]:1234/t/SECRET/chan",
+            "http://[::1]:1234/chan",
+            id="ipv6",
+        ),
+        pytest.param(
+            "user:SECRET@host.example/t/SECRET/chan?x=SECRET",
+            "host.example/chan",
+            id="no-scheme",
+        ),
+        pytest.param(RAW_CHANNELS[3], "<local>", id="file-url"),
+        pytest.param("FILE:///C:/SECRET", "<local>", id="file-url-upper"),
+        pytest.param("/home/SECRET/chan", "<local>", id="posix"),
+        pytest.param("/c/Users/SECRET/chan", "<local>", id="msys"),
+        pytest.param("./SECRET", "<local>", id="relative"),
+        pytest.param("~/SECRET", "<local>", id="home"),
+        pytest.param(r"C:\Users\SECRET\chan", "<local>", id="windows-backslash"),
+        pytest.param("C:/Users/SECRET/chan", "<local>", id="windows-slash"),
+        pytest.param(r"\\server\SECRET\chan", "<local>", id="unc"),
+        pytest.param("http://host.example:notaport/chan", "<invalid>", id="bad-port"),
+        pytest.param("https://[::1/chan", "<invalid>", id="bad-ipv6"),
+        pytest.param("https:///chan", "<invalid>", id="no-host"),
+        # L1 and L2 both redact, so a second pass must change nothing.
+        pytest.param("<local>", "<local>", id="marker-local"),
+        pytest.param("<invalid>", "<invalid>", id="marker-invalid"),
+    ],
+)
+def test_redact_channel(value: str, expected: str) -> None:
+    """Secrets and local paths are removed. Plain channel names are kept."""
+    result = core.redact_channel(value)
+    assert result == expected
+    assert type(result) is str
+    assert core.redact_channel(result) == result
+
+
+def test_emit_sanitizes_before_transform(
+    in_memory: Provider, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Providers get sanitized attributes; drop logs name keys, never values."""
+    assert set(RAW_ATTRIBUTES) - {"undeclared"} == set(core.ATTRIBUTES)
+    seen = []
+
+    def transform(event: Event) -> Event:
+        """Keep the provider input for the privacy check."""
+        seen.append(event)
+        return event
+
+    in_memory.transform = transform
+    dispatcher = Dispatcher([in_memory])
+    with caplog.at_level(logging.DEBUG):
+        dispatcher.emit(Event(EventName.SUCCESS, RAW_ATTRIBUTES))
+        dispatcher.flush()
+    assert [event.attributes for event in seen] == [SANITIZED_ATTRIBUTES]
+    assert records(in_memory) == [
+        {
+            key: tuple(value) if isinstance(value, list) else value
+            for key, value in SANITIZED_ATTRIBUTES.items()
+        }
+    ]
+    assert "undeclared" in caplog.text
+    assert SECRET not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "key, value",
+    [
+        pytest.param("command", "rm -rf /", id="unknown-command"),
+        pytest.param("channel_priority", "bogus", id="unknown-priority"),
+        pytest.param("exception_name", "FooPluginError", id="unknown-exception"),
+        pytest.param("requested_packages", None, id="none"),
+        pytest.param("requested_packages", [1234], id="not-a-string"),
+        pytest.param("channels", [1234], id="channel-not-a-string"),
+        pytest.param(
+            "channels", "https://host.example/t/SECRET/chan", id="channels-string"
+        ),
+    ],
+)
+def test_bad_values_are_dropped(key: str, value: Any) -> None:
+    """A value that fails its check is dropped and does not raise."""
+    assert key not in core.sanitize_attributes({key: value})
+
+
+@pytest.mark.parametrize("key", ["requested_packages", "missing_packages"])
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        pytest.param({"numpy": "SECRET"}, None, id="mapping"),
+        pytest.param("numpy", None, id="string"),
+        pytest.param(["numpy", "python"], ["numpy", "python"], id="list"),
+        pytest.param(("numpy", "python"), ("numpy", "python"), id="tuple"),
+        pytest.param([], [], id="empty-list"),
+        pytest.param((), (), id="empty-tuple"),
+        pytest.param(["numpy", 1234], None, id="invalid-item"),
+        pytest.param(("numpy", "python\n"), None, id="partial-name-match"),
+    ],
+)
+def test_package_names_are_checked_before_transform(
+    in_memory: Provider, key: str, value: Any, expected: Any
+) -> None:
+    """Providers receive only lists or tuples of valid package names."""
+    # These malformed direct API inputs are synthetic; normal capture supplies lists.
+    seen = []
+
+    def transform(event: Event) -> Event:
+        """Record the provider input before export cleanup."""
+        seen.append(event.attributes)
+        return event
+
+    in_memory.transform = transform
+    dispatcher = Dispatcher([in_memory])
+    dispatcher.emit(Event(EventName.SUCCESS, {key: value}))
+    assert seen == [{} if expected is None else {key: expected}]
+
+
 def records(provider: Provider) -> list[dict[str, Any]]:
     """Return the attributes of each record the provider exported."""
     return [
@@ -45,18 +298,22 @@ def records(provider: Provider) -> list[dict[str, Any]]:
     ]
 
 
-def test_emit_adds_event_name_and_drops_non_scalar_values(in_memory: Provider) -> None:
+def test_emit_adds_event_name_and_drops_non_scalar_values() -> None:
     """The event name is added. Nested and mixed-type values are dropped."""
-    dispatcher = Dispatcher([in_memory])
-    dispatcher.emit(
-        Event(
-            EventName.SUCCESS,
-            {"a": 1, "nested": {"x": 1}, "mixed": [1, "a"], "ok": ["a"]},
-        )
+    # clean_attributes runs after the transform, so these keys reach it.
+    provider = Provider(
+        "p",
+        InMemoryLogRecordExporter(),
+        events=SUCCESS_ONLY,
+        transform=lambda e: Event(
+            e.name, {"a": 1, "nested": {"x": 1}, "mixed": [1, "a"], "ok": ["a"]}
+        ),
     )
+    dispatcher = Dispatcher([provider])
+    dispatcher.emit(Event(EventName.SUCCESS))
     dispatcher.flush()
-    assert records(in_memory) == [{"a": 1, "ok": ("a",)}]
-    (exported,) = in_memory.exporter.get_finished_logs()
+    assert records(provider) == [{"a": 1, "ok": ("a",)}]
+    (exported,) = provider.exporter.get_finished_logs()
     assert exported.log_record.event_name == EventName.SUCCESS
 
 
@@ -90,14 +347,14 @@ def test_transform_is_per_provider_and_can_drop(in_memory: Provider) -> None:
         events=SUCCESS_ONLY,
         transform=lambda e: Event("renamed", {"k": "v"}),
     )
-    event = Event(EventName.SUCCESS, {"secret": "x"})
+    event = Event(EventName.SUCCESS, ATTRS)
     dispatcher = Dispatcher([in_memory, dropping, changing])
     dispatcher.emit(event)
     dispatcher.flush()
-    assert records(in_memory) == [{"secret": "x"}]
+    assert records(in_memory) == [ATTRS]
     assert records(dropping) == []
     assert records(changing) == [{"k": "v"}]
-    assert event.attributes == {"secret": "x"}
+    assert event.attributes == ATTRS
 
 
 @pytest.mark.parametrize(
@@ -122,14 +379,10 @@ def test_otel_environment_is_ignored(
     dispatcher = Dispatcher([in_memory])
     if when == "before_emit":
         monkeypatch.setenv(var, value)
-    dispatcher.emit(Event(EventName.SUCCESS, {"a": "abcdefgh", "b": 1, "c": 2}))
+    dispatcher.emit(Event(EventName.SUCCESS, ATTRS))
     dispatcher.flush()
     (record,) = in_memory.exporter.get_finished_logs()
-    assert dict(record.log_record.attributes) == {
-        "a": "abcdefgh",
-        "b": 1,
-        "c": 2,
-    }
+    assert dict(record.log_record.attributes) == ATTRS
     assert "injected" not in record.resource.attributes
 
 
@@ -184,7 +437,7 @@ class FailsAfterYieldPlugin:
 def test_conda_plugin_provider_is_discovered(in_memory: Provider) -> None:
     """An ordinary conda plugin supplies a provider through the core hook."""
     context = make_context(ValidPlugin(in_memory))
-    dummy_data = {"a": 1}
+    dummy_data = ATTRS
     dispatcher = Dispatcher(core.load_providers(context))
     dispatcher.emit(Event(EventName.SUCCESS, dummy_data))
     assert dispatcher.flush() == {"in-memory": True}
@@ -288,7 +541,8 @@ def test_attribute_limit_variables_set_before_start_are_ignored() -> None:
         "sel = EventSelector.exact(Command.INSTALL, Outcome.SUCCESS)\n"
         "p = Provider('m', InMemoryLogRecordExporter(), events=[sel])\n"
         "d = Dispatcher([p])\n"
-        "d.emit(Event(EventName.SUCCESS, {'a': 'abcdefgh', 'b': 1, 'c': 2}))\n"
+        "d.emit(Event(EventName.SUCCESS, "
+        "{'command': 'install', 'channel_priority': 'flexible'}))\n"
         "d.flush()\n"
         "(r,) = p.exporter.get_finished_logs()\n"
         "print(sorted(r.log_record.attributes.items()))\n"
@@ -306,7 +560,7 @@ def test_attribute_limit_variables_set_before_start_are_ignored() -> None:
         text=True,
         check=True,
     ).stdout
-    assert out.strip() == "[('a', 'abcdefgh'), ('b', 1), ('c', 2)]"
+    assert out.strip() == "[('channel_priority', 'flexible'), ('command', 'install')]"
 
 
 def test_otel_log_records_do_not_reach_the_root_logger(
@@ -345,7 +599,7 @@ def test_events_are_required() -> None:
 def test_matching_event_is_exported() -> None:
     """An event that the provider subscribed to is exported."""
     provider = Provider("p", InMemoryLogRecordExporter(), events=SUCCESS_ONLY)
-    dummy_data = {"a": 1}
+    dummy_data = ATTRS
     dispatcher = Dispatcher([provider])
     dispatcher.emit(Event(EventName.SUCCESS, dummy_data))
     dispatcher.flush()
@@ -415,7 +669,7 @@ def test_invalid_declaration_skips_only_that_provider(
     assert len(warnings) == 1
     assert "bad" in warnings[0].getMessage()
     assert [p.provider.name for p in dispatcher.pipelines] == ["in-memory"]
-    dummy_data = {"a": 1}
+    dummy_data = ATTRS
     dispatcher.emit(Event(EventName.SUCCESS, dummy_data))
     assert dispatcher.flush() == {"in-memory": True}
     assert records(in_memory) == [dummy_data]

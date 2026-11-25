@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+from argparse import Namespace
+from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
+from conda.base.context import Context
 from conda.exceptions import PackagesNotFoundInChannelsError
+from conftest import RAW_CHANNELS, REDACTED_CHANNELS, SECRET
 from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter
 
-from conda_otel import capture
-from conda_otel.core import Dispatcher, Provider
+import conda_otel
+from conda_otel import capture, core, sources
+from conda_otel.core import Dispatcher, Event, Provider
 from conda_otel.events import (
     ALL_EVENTS,
     Command,
@@ -22,6 +27,16 @@ if TYPE_CHECKING:
     from typing import Any
 
 
+# Synthetic test data. Every secret contains SECRET.
+# channel::package spec; the channel part must not reach package names
+SPEC_WITH_CHANNEL = "https://user:SECRET@host.example/t/SECRET/chan::numpy"
+
+
+# a plugin may raise its own subclass
+class FooPluginError(PackagesNotFoundInChannelsError):
+    """A plugin's own subclass of the not-found error."""
+
+
 @pytest.fixture
 def ctx(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     """Replace conda's context with the few fields the hooks read."""
@@ -33,6 +48,7 @@ def ctx(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         download_only=False,
     )
     monkeypatch.setattr(capture, "context", fake)
+    monkeypatch.setattr(sources, "context", fake)
     return fake
 
 
@@ -116,26 +132,98 @@ def test_success_event(
     ctx: SimpleNamespace, dispatcher: Dispatcher, in_memory: Provider
 ) -> None:
     """A finished install sends one success event and clears the state."""
-    run_install()
+    ctx.channels = RAW_CHANNELS
+    capture.capture_command("install")
+    assert capture.request.channels == REDACTED_CHANNELS
+    capture.capture_requested_packages(frozenset({SPEC_WITH_CHANNEL}), frozenset())
+    capture.capture_resolved_packages("repodata.json", (), (record("numpy"),))
     capture.report_success("install")
     ((name, attrs),) = sent(in_memory)
     assert name == "install.success"
     assert attrs == {
         "command": "install",
-        "channels": ("conda-forge", "defaults"),
+        "channels": tuple(REDACTED_CHANNELS),
         "channel_priority": "flexible",
         "requested_packages": ("numpy",),
         "resolved_packages": ("numpy=1.0=0",),
     }
+    assert SECRET not in str(attrs)
     assert not capture.request.active
 
 
-def test_packages_not_found_event(
-    ctx: SimpleNamespace, dispatcher: Dispatcher, in_memory: Provider
+@pytest.mark.parametrize(
+    "channels, expected",
+    [
+        pytest.param(
+            [
+                "https://host.example/%74/SECRET/chan",
+                "https://host.example/t%2FSECRET/chan",
+                "https://host.example/label/a%20b",
+            ],
+            [
+                "https://host.example/chan",
+                "https://host.example/chan",
+                "https://host.example/label/a%20b",
+            ],
+            id="encoded-tokens",
+        ),
+        pytest.param(
+            [
+                "t/SECRET/user:SECRET@host.example/chan",
+                "user:SECRET@t/SECRET/chan",
+            ],
+            ["host.example/chan", "chan"],
+            id="combined-token-userinfo",
+        ),
+    ],
+)
+def test_channels_are_redacted_before_transform(
+    monkeypatch: pytest.MonkeyPatch,
+    dispatcher: Dispatcher,
+    in_memory: Provider,
+    channels: list[str],
+    expected: list[str],
 ) -> None:
-    """Missing packages send one event and clear the state."""
+    """Fake credentials are removed from direct events and captured channels."""
+    context = Context(
+        search_path=(),
+        argparse_args=Namespace(channel=channels, override_channels=True),
+    )
+    monkeypatch.setattr(capture, "context", context)
+    monkeypatch.setattr(sources, "context", context)
+    seen = []
+
+    def transform(event: Event) -> Event:
+        """Record the channels received by the provider."""
+        seen.append(event.attributes["channels"])
+        return event
+
+    in_memory.transform = transform
+    dispatcher.emit(Event("install.success", {"channels": channels}))
+    assert seen == [expected]
+    run_install()
+    assert capture.request.channels == expected
+    capture.report_success("install")
+    assert seen == [expected, expected]
+    assert [attrs["channels"] for _, attrs in sent(in_memory)] == [tuple(expected)] * 2
+
+
+@pytest.mark.parametrize(
+    "raised_class",
+    [
+        pytest.param(PackagesNotFoundInChannelsError, id="standard"),
+        pytest.param(FooPluginError, id="plugin-subclass"),
+    ],
+)
+def test_packages_not_found_event(
+    ctx: SimpleNamespace,
+    dispatcher: Dispatcher,
+    in_memory: Provider,
+    raised_class: type[PackagesNotFoundInChannelsError],
+) -> None:
+    """Missing packages send a known exception name and clear the state."""
     run_install(["nope"])
-    exc = PackagesNotFoundInChannelsError(["nope"], ["conda-forge"])
+    exc = raised_class(["nope"], ["conda-forge"])
     event = SimpleNamespace(exc_value=exc, exc_type=type(exc), channels=("from-event",))
     capture.report_error(event)
     ((name, attrs),) = sent(in_memory)
@@ -145,6 +233,31 @@ def test_packages_not_found_event(
     assert attrs["requested_packages"] == ("nope",)
     assert attrs["exception_name"] == "PackagesNotFoundInChannelsError"
     assert not capture.request.active
+
+
+@pytest.mark.parametrize(
+    "name", [pytest.param(name, id=name) for name in CAPTURE_CASES]
+)
+def test_capture_sends_only_declared_attributes(
+    ctx: SimpleNamespace,
+    dispatcher: Dispatcher,
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+) -> None:
+    """Capture produces no attribute that the core table does not declare."""
+    seen = []
+    monkeypatch.setattr(capture, "send", seen.append)
+    CAPTURE_CASES[name]()
+    assert len(seen) == 1
+    for event in seen:
+        assert set(event.attributes) <= set(core.ATTRIBUTES)
+
+
+def test_only_sources_reads_context_channels() -> None:
+    """No module except sources.py reads the raw channels."""
+    for path in Path(conda_otel.__file__).parent.glob("*.py"):
+        if path.name != "sources.py":
+            assert "context.channels" not in path.read_text()
 
 
 def test_other_exception_sends_nothing_and_clears_state(
@@ -195,12 +308,24 @@ def test_no_success_event_when_nothing_is_installed(
     [
         (["numpy>=1", "pandas"], ["numpy", "pandas"]),
         (["https://example.com/x-1.0-0.conda"], None),
-        (["Bad Name!"], None),
+        (["bad["], None),
+        pytest.param(["numpy", "bad["], None, id="mixed-valid-invalid"),
     ],
 )
 def test_package_names(specs: list[str], expected: list[str] | None) -> None:
     """Names are exact. A URL or a bad name gives None."""
     assert capture.package_names(specs) == expected
+
+
+def test_invalid_requested_spec_skips_event(
+    ctx: SimpleNamespace, dispatcher: Dispatcher, in_memory: Provider
+) -> None:
+    """One invalid requested spec skips the event, even with a valid spec."""
+    run_install(["numpy", "bad["])
+    assert capture.request.requested_names is None
+    capture.report_success("install")
+    assert sent(in_memory) == []
+    assert not capture.request.active
 
 
 def test_failing_provider_does_not_stop_the_command(

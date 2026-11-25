@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import TYPE_CHECKING
@@ -12,7 +11,13 @@ from conda.base.context import context
 from conda.exceptions import InvalidMatchSpec, PackagesNotFoundInChannelsError
 from conda.models.match_spec import MatchSpec
 
-from conda_otel.core import Dispatcher, Event, load_providers
+from conda_otel import sources
+from conda_otel.core import (
+    PACKAGE_NAME,
+    Dispatcher,
+    Event,
+    load_providers,
+)
 from conda_otel.events import EventName
 
 if TYPE_CHECKING:
@@ -61,11 +66,7 @@ def package_names(specs: list[Any]) -> list[str] | None:
         except InvalidMatchSpec:
             return None
         name = spec.get_exact_value("name")
-        if (
-            spec.get_raw_value("url")
-            or not name
-            or not re.fullmatch(r"[a-z0-9_.-]+", name)
-        ):
+        if spec.get_raw_value("url") or not name or not PACKAGE_NAME.fullmatch(name):
             return None
         names.add(name)
     return sorted(names)
@@ -90,7 +91,7 @@ def capture_command(command: str) -> None:
         if context.plugins.conda_otel and get_dispatcher():
             request.active = True
             # Both events use the configured channels.
-            request.channels = list(context.channels)
+            request.channels = sources.configured_channels()
     except Exception:
         logger.debug("Telemetry capture is off: it failed to start.", exc_info=True)
         clear_request()
@@ -156,7 +157,7 @@ def report_error(event: CondaExceptionEvent) -> None:
                     "channel_priority": str(context.channel_priority),
                     "requested_packages": request.requested_names,
                     "missing_packages": missing,
-                    "exception_name": event.exc_type.__name__,
+                    "exception_name": PackagesNotFoundInChannelsError.__name__,
                 },
             )
         )
